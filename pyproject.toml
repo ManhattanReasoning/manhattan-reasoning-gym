@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "manhattan-reasoning-gym"
-version = "0.1.0"
+version = "0.1.1"
 description = "SDK + CLI (mrg) for local synth/PnR feedback, sandboxed agents, and running FPGA designs on real silicon."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,8 +29,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://manhattanreasoning.com"
-Repository = "https://github.com/Barnard-PL-Labs/manhattan-reasoning-gym"
-Issues = "https://github.com/Barnard-PL-Labs/manhattan-reasoning-gym/issues"
+Repository = "https://github.com/ManhattanReasoning/manhattan-reasoning-gym"
+Issues = "https://github.com/ManhattanReasoning/manhattan-reasoning-gym/issues"
 
 [project.scripts]
 mrg = "manhattan_reasoning_gym._cli:main"
