@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "manhattan-reasoning-gym"
+version = "0.1.0"
+description = "SDK + CLI (mrg) for local synth/PnR feedback, sandboxed agents, and running FPGA designs on real silicon."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Barnard PL Labs" }]
+keywords = [
+    "fpga", "ecp5", "hardware", "amaranth", "synthesis", "place-and-route",
+    "reinforcement-learning", "rl",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.urls]
+Homepage = "https://manhattanreasoning.com"
+Repository = "https://github.com/Barnard-PL-Labs/manhattan-reasoning-gym"
+Issues = "https://github.com/Barnard-PL-Labs/manhattan-reasoning-gym/issues"
+
+[project.scripts]
+mrg = "manhattan_reasoning_gym._cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manhattan_reasoning_gym"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["manhattan_reasoning_gym"]
