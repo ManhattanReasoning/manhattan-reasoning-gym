@@ -21,7 +21,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_IMAGE = "ghcr.io/barnard-pl-labs/mrg-sandbox:latest"
+DEFAULT_IMAGE = "ghcr.io/manhattanreasoning/mrg-sandbox:latest"
 
 
 @dataclass

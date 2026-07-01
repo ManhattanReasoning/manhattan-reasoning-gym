@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ._report import BuildReport
 
-DEFAULT_SANDBOX_IMAGE = "ghcr.io/barnard-pl-labs/mrg-sandbox:latest"
+DEFAULT_SANDBOX_IMAGE = "ghcr.io/manhattanreasoning/mrg-sandbox:latest"
 
 
 class SandboxUnavailableError(RuntimeError):

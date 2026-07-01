@@ -23,7 +23,7 @@ For local synth/PnR and sandboxing, pull the pinned toolchain image once (the
 SDK runs it for you — you never install yosys/nextpnr/LiteX):
 
 ```bash
-docker pull ghcr.io/barnard-pl-labs/mrg-sandbox:latest
+docker pull ghcr.io/manhattanreasoning/mrg-sandbox:latest
 ```
 
 ## Local feedback — `mrg.build`
