@@ -105,7 +105,7 @@ with app:                    # programs the FPGA on first use, releases on exit
 ```
 
 Or drive it from the CLI with a file that defines an `App` and an
-`@app.local_entrypoint()` — see [`examples/app.py`](examples/app.py), which
+`@app.local_entrypoint()` — see [`examples/app.py`](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/examples/app.py), which
 exercises the example MAC design end-to-end:
 
 ```bash
@@ -141,7 +141,7 @@ orchestrator URL). Every command resolves the key in this order:
 
 ## Tutorials
 
-Two runnable notebooks in [`examples/notebooks/`](examples/notebooks/):
+Two runnable notebooks in [`examples/notebooks/`](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/tree/main/examples/notebooks):
 
 - **`01_build_and_run`** — local synth/pnr feedback → program a real FPGA.
 - **`02_sandboxing`** — run an agent in a locked sandbox that promotes to silicon.
@@ -174,4 +174,4 @@ ruff check . && pytest -q
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/LICENSE).
