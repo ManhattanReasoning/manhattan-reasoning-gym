@@ -62,7 +62,12 @@ def device_flow_token(
     prompt = (
         f"Open {data['verification_uri']} and enter code: {data['user_code']}"
     )
-    (on_prompt or print)(prompt)
+    if on_prompt:
+        on_prompt(prompt)
+    else:
+        # flush: when stdout isn't a tty the prompt must not sit in the buffer
+        # while we block polling GitHub below.
+        print(prompt, flush=True)
 
     while True:
         time.sleep(interval)

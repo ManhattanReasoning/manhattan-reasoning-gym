@@ -26,6 +26,37 @@ SDK runs it for you — you never install yosys/nextpnr/LiteX):
 docker pull ghcr.io/manhattanreasoning/mrg-sandbox:latest
 ```
 
+If your system Python is broken or externally managed, the robust path is
+`uv venv && uv pip install manhattan-reasoning-gym`.
+
+## Agent quickstart (headless)
+
+Copy-paste path for coding agents and CI — no browser, no prompts:
+
+```bash
+export MRG_API_KEY=...        # or: mrg login --github-token <no-scope PAT>
+mrg synth examples/design.py  # JSON report on stdout, ~seconds
+mrg pnr   examples/design.py  # JSON report (fmax_mhz, timing_met), ~tens of seconds
+mrg run   examples/app.py     # programs a real FPGA, ~2-3 min first time
+mrg reset 0                   # free the board when done (async, ~1 min)
+```
+
+- **All bus addresses are byte addresses**: word *n* in your design's register
+  map is byte address `4*n` for `app.read`/`app.write` and `mrg read`/`mrg write`.
+- **After `mrg run` the board stays reserved to you** — reuse it with
+  `mrg run --no-program` / `mrg read` / `mrg write`, and release it with
+  `mrg reset <fpga_id>` when done. Reset is an async queued job that reflashes
+  the base SoC (~1 min); poll `mrg status` rather than expecting instant `idle`.
+- `mrg synth` / `mrg pnr` print machine-readable JSON on stdout and exit
+  non-zero when the build fails — parse the JSON, don't scrape text.
+- Rough time budget: `synth` seconds · `pnr` tens of seconds · `mrg run`
+  ~2-3 min for the first program · `--no-program` seconds · `reset` ~1 min.
+- `mrg login` with no flags is an interactive GitHub device flow. Headless,
+  prefer `$MRG_API_KEY`, or `mrg login --github-token <PAT>` (also reads
+  `$GITHUB_TOKEN`) with a **no-scope** PAT — it's only used to read your
+  username. If you must run the device flow from a non-tty context, relay the
+  printed URL + code to a human.
+
 ## Local feedback — `mrg.build`
 
 ```python
@@ -67,11 +98,25 @@ import manhattan_reasoning_gym as mrg
 
 app = mrg.cloud.App("my_design", design="examples/design.py")
 with app:                    # programs the FPGA on first use, releases on exit
-    app.write(0x0, 3)
+    app.write(0x0, 3)        # byte address: word n in the design => 4*n
     print("read:", app.read(0x8))
 ```
 
-Or drive it from the CLI: `mrg run my_design.py`.
+Or drive it from the CLI with a file that defines an `App` and an
+`@app.local_entrypoint()` — see [`examples/app.py`](examples/app.py), which
+exercises the example MAC design end-to-end:
+
+```bash
+mrg run examples/app.py
+```
+
+Name your registers by subclassing `mrg.RegisterMap` (byte addresses).
+
+**Board lifecycle:** the `with app:` form releases the board on exit, but
+`mrg run` does **not** — the reservation persists so you can keep iterating
+with `mrg run --no-program`, `mrg read`, and `mrg write`. Free the board with
+`mrg reset <fpga_id>` (an async job that reflashes the base SoC, ~1 min — poll
+`mrg status`).
 
 ## Authentication (cloud only)
 
@@ -100,7 +145,8 @@ Two runnable notebooks in [`examples/notebooks/`](examples/notebooks/):
 - **`02_sandboxing`** — run an agent in a locked sandbox that promotes to silicon.
 
 The shared `examples/design.py` is a tiny tunable multiply-accumulate; tweak its
-`WIDTH` and watch DSP/Fmax move. `examples/agent.py` is the sandboxed agent.
+`WIDTH` and watch DSP/Fmax move. `examples/agent.py` is the sandboxed agent, and
+`examples/app.py` is the `mrg run` app that drives the MAC on real silicon.
 
 ## CLI reference
 

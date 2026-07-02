@@ -1,10 +1,11 @@
 """A tiny, tunable example user design: a bus-driven multiply-accumulate.
 
-Wishbone B4 slave register map (32-bit word addresses):
-    0  write   set operand A
-    1  write   accumulate: acc += A * (value written here)
-    2  read     accumulator, low 32 bits
-    3  write    reset accumulator to 0
+Wishbone B4 slave register map. The bus is byte-addressed from software: word
+address n below is byte address 4*n in app.read/app.write and mrg read/write.
+    word 0 (byte 0x0)  write  set operand A
+    word 1 (byte 0x4)  write  accumulate: acc += A * (value written here)
+    word 2 (byte 0x8)  read   accumulator, low 32 bits
+    word 3 (byte 0xC)  write  reset accumulator to 0
 
 The signal names (wb_*) are the fixed contract the SoC binds by name — keep them
 as-is. The one knob to *play with* is WIDTH below: widen the operands and watch

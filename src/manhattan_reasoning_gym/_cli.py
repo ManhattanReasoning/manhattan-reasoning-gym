@@ -114,7 +114,7 @@ def cmd_login(args: argparse.Namespace) -> None:
             try:
                 github_token = _oauth.device_flow_token(
                     client_id,
-                    on_prompt=lambda m: print(f"\n  {_c(m, _BOLD)}\n"),
+                    on_prompt=lambda m: print(f"\n  {_c(m, _BOLD)}\n", flush=True),
                 )
             except (_oauth.DeviceFlowError, requests.HTTPError) as e:
                 sys.exit(f"error: GitHub device login failed: {e}")
