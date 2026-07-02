@@ -85,3 +85,54 @@ def test_resolve_is_cached(monkeypatch):
     app._resolve_fpga()
     app._resolve_fpga()  # second call must not re-pick
     assert app.fpga_id == 3
+
+
+# ── timing-target plumbing ───────────────────────────────────────────────────
+
+def test_app_forwards_timing_target_to_submit(monkeypatch):
+    calls = {}
+
+    def fake_submit(fpga_id, design, api_key, api_url, **kw):
+        calls.update(kw)
+        return "job"
+
+    monkeypatch.setattr(_client, "submit", fake_submit)
+    monkeypatch.setattr(_client, "poll_job", lambda *a, **kw: None)
+
+    app = manhattan_reasoning_gym.App(
+        "x", design="d.py", fpga_id=1, timing_target_mhz=90
+    )
+    app._program()
+    assert calls["timing_target_mhz"] == 90
+
+
+def test_app_timing_target_from_env(monkeypatch):
+    monkeypatch.setenv("MRG_TIMING_TARGET_MHZ", "75")
+    app = manhattan_reasoning_gym.App("x", design="d.py")
+    assert app.timing_target_mhz == 75.0
+
+
+def test_submit_sends_timing_target_form_field(monkeypatch, tmp_path):
+    design = tmp_path / "d.py"
+    design.write_text("# design\n")
+    seen = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"job_id": "job"}
+
+    def fake_post(url, headers, files, data):
+        seen["data"] = data
+        return _Resp()
+
+    monkeypatch.setattr(_client.requests, "post", fake_post)
+
+    _client.submit(1, str(design), "k", "u", timing_target_mhz=90)
+    assert seen["data"] == {"timing_target_mhz": "90"}
+
+    # Nothing set => no form body at all (older servers get an unchanged request).
+    _client.submit(1, str(design), "k", "u")
+    assert seen["data"] is None

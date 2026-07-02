@@ -49,29 +49,50 @@ def pnr(
     design: str | Path,
     *,
     target_mhz: float | None = None,
+    sys_clk_mhz: float | None = None,
+    timing_target_mhz: float | None = None,
     seed: int = 1,
     work: str | Path | None = None,
 ) -> BuildReport:
-    """Full-SoC place-and-route report: Fmax, timing-met, SoC-wide util."""
-    return _build("pnr", design, target_mhz=target_mhz, seed=seed, work=work)
+    """Full-SoC place-and-route report: Fmax, timing-met, SoC-wide util.
+
+    ``sys_clk_mhz`` re-clocks the SoC (PLL output); ``timing_target_mhz`` is the
+    constraint PnR optimizes against and ``timing_met`` is graded on, defaulting
+    to the sys clock. ``target_mhz`` is a legacy alias that sets both — passing it
+    alongside either new knob is rejected by the toolchain.
+    """
+    return _build(
+        "pnr", design, target_mhz=target_mhz, sys_clk_mhz=sys_clk_mhz,
+        timing_target_mhz=timing_target_mhz, seed=seed, work=work,
+    )
 
 
-def _build(mode, design, *, target_mhz=None, seed=1, work=None) -> BuildReport:
+def _build(
+    mode, design, *, target_mhz=None, sys_clk_mhz=None, timing_target_mhz=None,
+    seed=1, work=None,
+) -> BuildReport:
     if _have_local_toolchain():
-        return _build_in_process(mode, design, target_mhz, seed, work)
-    return _build_in_docker(mode, design, target_mhz)
+        return _build_in_process(
+            mode, design, target_mhz, sys_clk_mhz, timing_target_mhz, seed, work
+        )
+    return _build_in_docker(mode, design, target_mhz, sys_clk_mhz, timing_target_mhz)
 
 
-def _build_in_process(mode, design, target_mhz, seed, work) -> BuildReport:
+def _build_in_process(
+    mode, design, target_mhz, sys_clk_mhz, timing_target_mhz, seed, work
+) -> BuildReport:
     import mrg_build
 
     rep = mrg_build.build(
-        mode=mode, design=design, target_mhz=target_mhz, seed=seed, work=work
+        mode=mode, design=design, target_mhz=target_mhz, sys_clk_mhz=sys_clk_mhz,
+        timing_target_mhz=timing_target_mhz, seed=seed, work=work,
     )
     return BuildReport.from_dict(rep.to_dict())
 
 
-def _build_in_docker(mode, design, target_mhz) -> BuildReport:
+def _build_in_docker(
+    mode, design, target_mhz, sys_clk_mhz=None, timing_target_mhz=None
+) -> BuildReport:
     if shutil.which("docker") is None:
         raise SandboxUnavailableError(
             "local synth/pnr needs the FPGA toolchain. Install Docker so mrg can "
@@ -88,6 +109,12 @@ def _build_in_docker(mode, design, target_mhz) -> BuildReport:
     ]
     if target_mhz:
         cmd += ["--target-mhz", str(target_mhz)]
+    # Only forward the new flags when explicitly set — a published image may
+    # predate them, and the toolchain rejects mixing them with --target-mhz.
+    if sys_clk_mhz:
+        cmd += ["--sys-clk-mhz", str(sys_clk_mhz)]
+    if timing_target_mhz:
+        cmd += ["--timing-target-mhz", str(timing_target_mhz)]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     out = proc.stdout.strip()

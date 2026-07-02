@@ -69,7 +69,10 @@ rep = mrg.build.pnr("examples/design.py")     # full SoC: real Fmax + timing
 print(rep.fmax_mhz, rep.timing_met, rep.util.dsp.used)
 ```
 
-CLI: `mrg synth design.py` · `mrg pnr design.py [--target-mhz N]`.
+CLI: `mrg synth design.py` · `mrg pnr design.py [--sys-clk-mhz N] [--timing-target-mhz N]`
+(`--sys-clk-mhz` re-clocks the SoC; `--timing-target-mhz` is the constraint PnR
+optimizes against and `timing_met` is graded on, defaulting to the sys clock;
+`--target-mhz` stays as a legacy alias for both).
 
 `synth` is the cheap "is it getting bigger?" signal (core-only util); `pnr`
 places & routes the full SoC for the truthful system-clock Fmax and timing.
@@ -154,8 +157,9 @@ The shared `examples/design.py` is a tiny tunable multiply-accumulate; tweak its
 
 ```
 mrg login | logout
-mrg synth <design.py> [--target-mhz N]      # local synthesis report
-mrg pnr   <design.py> [--target-mhz N]      # local full-SoC place & route
+mrg synth <design.py>                       # local synthesis report
+mrg pnr   <design.py> [--sys-clk-mhz N] [--timing-target-mhz N] [--target-mhz N]
+                                            # local full-SoC place & route
 mrg run   <file.py> [--fpga-id N] [--no-program]
 mrg status [fpga_id] [--json]
 mrg job <fpga_id> <job_id> [--json]
