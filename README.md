@@ -46,9 +46,11 @@ mrg reset 0                   # free the board when done (async, ~1 min)
 - **After `mrg run` the board stays reserved to you** — reuse it with
   `mrg run --no-program` / `mrg read` / `mrg write`, and release it with
   `mrg reset <fpga_id>` when done. Reset is an async queued job that reflashes
-  the base SoC (~1 min); poll `mrg status` rather than expecting instant `idle`.
+  the base SoC (~1 min); poll `mrg status --json` rather than expecting
+  instant `idle`.
 - `mrg synth` / `mrg pnr` print machine-readable JSON on stdout and exit
-  non-zero when the build fails — parse the JSON, don't scrape text.
+  non-zero when the build fails; `mrg status --json` and `mrg job --json`
+  emit the raw orchestrator response — parse JSON, don't scrape tables.
 - Rough time budget: `synth` seconds · `pnr` tens of seconds · `mrg run`
   ~2-3 min for the first program · `--no-program` seconds · `reset` ~1 min.
 - `mrg login` with no flags is an interactive GitHub device flow. Headless,
@@ -155,8 +157,9 @@ mrg login | logout
 mrg synth <design.py> [--target-mhz N]      # local synthesis report
 mrg pnr   <design.py> [--target-mhz N]      # local full-SoC place & route
 mrg run   <file.py> [--fpga-id N] [--no-program]
-mrg status [fpga_id]
-mrg job | logs | cancel <fpga_id> <job_id>
+mrg status [fpga_id] [--json]
+mrg job <fpga_id> <job_id> [--json]
+mrg logs | cancel <fpga_id> <job_id>
 mrg reset <fpga_id>
 mrg read  <fpga_id> <addr> [--count N]
 mrg write <fpga_id> <addr> <value>

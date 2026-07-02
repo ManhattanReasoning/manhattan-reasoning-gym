@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -206,6 +207,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     if args.fpga_id is not None:
         # Single FPGA detail view
         d = _client.get_fpga(args.fpga_id, api_key, api_url)
+        if args.json:
+            print(json.dumps(d, indent=2))
+            return
         sess = d.get("session") or {}
         print(f"\n  FPGA {d['fpga_id']}")
         print(f"  {'state:':<14} {_fmt_state(d['state'])}")
@@ -221,6 +225,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     else:
         # All-FPGAs table
         fpgas = _client.list_fpgas(api_key, api_url)
+        if args.json:
+            print(json.dumps(fpgas, indent=2))
+            return
         header = f"  {'ID':>2}  {'STATE':<14}  {'OWNER':<12}  CURRENT JOB"
         sep    = "  " + "─" * (len(header) - 2)
         print()
@@ -242,6 +249,9 @@ def cmd_status(args: argparse.Namespace) -> None:
 def cmd_job(args: argparse.Namespace) -> None:
     api_key, api_url = _creds(args)
     d = _client.get_job(args.fpga_id, args.job_id, api_key, api_url)
+    if args.json:
+        print(json.dumps(d, indent=2))
+        return
     print(f"\n  {'job_id:':<14} {d['job_id']}")
     print(f"  {'fpga_id:':<14} {d['fpga_id']}")
     print(f"  {'type:':<14} {d['type']}")
@@ -373,11 +383,15 @@ def main() -> None:
                           help="show FPGA states (all, or one if fpga_id given)")
     st_p.add_argument("fpga_id", nargs="?", type=int, default=None,
                       help="FPGA id (omit for the full table)")
+    st_p.add_argument("--json", action="store_true",
+                      help="print the raw orchestrator response as JSON")
 
     # job <fpga_id> <job_id>
     job_p = sub.add_parser("job", parents=[common], help="show job status and metadata")
     job_p.add_argument("fpga_id", type=int)
     job_p.add_argument("job_id")
+    job_p.add_argument("--json", action="store_true",
+                       help="print the raw orchestrator response as JSON")
 
     # logs <fpga_id> <job_id>
     log_p = sub.add_parser("logs", parents=[common], help="print build logs for a job")
