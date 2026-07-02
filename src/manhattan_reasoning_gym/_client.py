@@ -69,10 +69,18 @@ def submit(
     api_key: str,
     api_url: str,
     sys_clk_freq: int | None = None,
+    timing_target_mhz: float | None = None,
 ) -> str:
     url = f"{api_url}/fpga/{fpga_id}/submit"
-    # Optional multipart form field; older servers simply ignore the extra field.
-    data = {"sys_clk_freq": str(sys_clk_freq)} if sys_clk_freq else None
+    # Optional multipart form fields; older servers simply ignore extra fields.
+    # sys_clk_freq re-clocks the SoC (Hz); timing_target_mhz is the PnR/grading
+    # constraint (MHz), sent only when the caller overrides the sys-clock default.
+    data = {}
+    if sys_clk_freq:
+        data["sys_clk_freq"] = str(sys_clk_freq)
+    if timing_target_mhz:
+        data["timing_target_mhz"] = str(timing_target_mhz)
+    data = data or None
     with open(design_path, "rb") as f:
         resp = requests.post(
             url, headers={"X-API-Key": api_key}, files={"file": f}, data=data

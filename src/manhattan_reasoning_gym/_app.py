@@ -59,6 +59,7 @@ class App:
         api_key: str | None = None,
         api_url: str = _client.DEFAULT_API_URL,
         sys_clk_freq: int | None = None,
+        timing_target_mhz: float | None = None,
     ) -> None:
         self.name = name
         self.design = design
@@ -70,6 +71,12 @@ class App:
         # so the same knob works from the CLI, the env, or an explicit arg.
         _env_clk = os.environ.get("MRG_SYS_CLK_FREQ")
         self.sys_clk_freq = sys_clk_freq or (int(_env_clk) if _env_clk else None)
+        # Optional PnR/grading timing target (MHz); defaults server-side to the
+        # sys clock. Falls back to $MRG_TIMING_TARGET_MHZ, mirroring sys_clk_freq.
+        _env_tt = os.environ.get("MRG_TIMING_TARGET_MHZ")
+        self.timing_target_mhz = timing_target_mhz or (
+            float(_env_tt) if _env_tt else None
+        )
         # Resolve the key: explicit arg > $MRG_API_KEY > stored login.
         # Left empty if none found; the CLI re-checks before running, and
         # programmatic callers can set .api_key later.
@@ -126,6 +133,7 @@ class App:
         job_id = _client.submit(
             self.fpga_id, self.design, self.api_key, self.api_url,
             sys_clk_freq=self.sys_clk_freq,
+            timing_target_mhz=self.timing_target_mhz,
         )
         bar = _progress.BuildProgress(self.name, self.fpga_id)
         try:

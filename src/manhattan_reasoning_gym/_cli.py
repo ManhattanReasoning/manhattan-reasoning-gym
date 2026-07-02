@@ -179,6 +179,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         app.fpga_id = args.fpga_id
     if args.sys_clk_freq is not None:
         app.sys_clk_freq = args.sys_clk_freq
+    if args.timing_target_mhz is not None:
+        app.timing_target_mhz = args.timing_target_mhz
     if args.api_url:
         app.api_url = args.api_url
     if args.api_key:
@@ -300,7 +302,12 @@ def _local_report(mode: str, args: argparse.Namespace) -> None:
         if mode == "synth":
             rep = _local_build.synth(args.design)
         else:
-            rep = _local_build.pnr(args.design, target_mhz=args.target_mhz)
+            rep = _local_build.pnr(
+                args.design,
+                target_mhz=args.target_mhz,
+                sys_clk_mhz=args.sys_clk_mhz,
+                timing_target_mhz=args.timing_target_mhz,
+            )
     except _local_build.SandboxUnavailableError as exc:
         sys.exit(f"error: {exc}")
     print(rep.to_json())
@@ -363,6 +370,10 @@ def main() -> None:
                        dest="sys_clk_freq", metavar="HZ",
                        help="override the SoC compute clock in Hz, e.g. 90e6 "
                             "(default: build server's 50 MHz)")
+    run_p.add_argument("--timing-target-mhz", type=float, default=None,
+                       dest="timing_target_mhz", metavar="MHZ",
+                       help="override the PnR/grading timing target in MHz "
+                            "(default: the sys clock)")
 
     # synth <design.py>  — local, no cloud
     synth_p = sub.add_parser(
@@ -376,7 +387,13 @@ def main() -> None:
     )
     pnr_p.add_argument("design", help="user Amaranth design.py")
     pnr_p.add_argument("--target-mhz", type=float, default=None, dest="target_mhz",
-                       help="timing target; also re-clocks the SoC")
+                       help="legacy alias: sets both the SoC clock and timing target")
+    pnr_p.add_argument("--sys-clk-mhz", type=float, default=None, dest="sys_clk_mhz",
+                       help="SoC compute clock (PLL output) in MHz")
+    pnr_p.add_argument("--timing-target-mhz", type=float, default=None,
+                       dest="timing_target_mhz",
+                       help="timing constraint PnR optimizes against and timing_met "
+                            "is graded on (default: the sys clock)")
 
     # status [fpga_id]
     st_p = sub.add_parser("status", parents=[common],

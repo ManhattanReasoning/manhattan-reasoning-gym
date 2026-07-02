@@ -38,6 +38,7 @@ class BuildReport:
     scope: str = "core"  # "core" | "soc"
     fits: bool | None = None
     fmax_mhz: float | None = None
+    sys_clk_mhz: float | None = None
     target_mhz: float | None = None
     timing_met: bool | None = None
     clock: str | None = None
@@ -58,6 +59,7 @@ class BuildReport:
         return cls(
             mode=d["mode"], ok=d["ok"], scope=d.get("scope", "core"),
             fits=d.get("fits"), fmax_mhz=d.get("fmax_mhz"),
+            sys_clk_mhz=d.get("sys_clk_mhz"),
             target_mhz=d.get("target_mhz"), timing_met=d.get("timing_met"),
             clock=d.get("clock"), util=util, synth_cells=d.get("synth_cells"),
             warnings=d.get("warnings", []), design_hash=d.get("design_hash"),
