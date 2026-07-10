@@ -83,6 +83,43 @@ def _creds(args: argparse.Namespace) -> tuple[str, str]:
     return api_key, api_url
 
 
+def _creds_optional(args: argparse.Namespace) -> tuple[str, str]:
+    """Same resolution as _creds, but never exits.
+
+    Board status, job status, and logs are public read endpoints -- the
+    orchestrator doesn't check the key for them -- so a caller with no stored
+    login shouldn't be blocked from reading them. Anything that mutates state
+    still goes through _creds, which the server does enforce.
+    """
+    api_url = args.api_url or _client.DEFAULT_API_URL
+    api_key = (
+        args.api_key
+        or os.environ.get("MRG_API_KEY")
+        or _credentials.load(api_url)
+        or ""
+    )
+    return api_key, api_url
+
+
+def _resolve_job_id(
+    fpga_id: int, job_id: str | None, api_key: str, api_url: str
+) -> str:
+    """Return job_id as given, or the board's current job if it was omitted.
+
+    Lets `mrg logs 0` / `mrg cancel 0` / `mrg job 0` work against whatever's
+    running right now without pasting a UUID -- current_job_id is already
+    tracked server-side, so this is one extra GET rather than any new local
+    state to keep in sync.
+    """
+    if job_id:
+        return job_id
+    fpga = _client.get_fpga(fpga_id, api_key, api_url)
+    current = fpga.get("current_job_id")
+    if not current:
+        sys.exit(f"error: FPGA {fpga_id} has no current job; pass a job_id")
+    return current
+
+
 def _load_user_module(path: str):
     p = Path(path).resolve()
     if not p.exists():
@@ -204,7 +241,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    api_key, api_url = _creds(args)
+    api_key, api_url = _creds_optional(args)
 
     if args.fpga_id is not None:
         # Single FPGA detail view
@@ -249,8 +286,9 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def cmd_job(args: argparse.Namespace) -> None:
-    api_key, api_url = _creds(args)
-    d = _client.get_job(args.fpga_id, args.job_id, api_key, api_url)
+    api_key, api_url = _creds_optional(args)
+    job_id = _resolve_job_id(args.fpga_id, args.job_id, api_key, api_url)
+    d = _client.get_job(args.fpga_id, job_id, api_key, api_url)
     if args.json:
         print(json.dumps(d, indent=2))
         return
@@ -264,15 +302,17 @@ def cmd_job(args: argparse.Namespace) -> None:
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
-    api_key, api_url = _creds(args)
-    text = _client.get_logs(args.fpga_id, args.job_id, api_key, api_url)
+    api_key, api_url = _creds_optional(args)
+    job_id = _resolve_job_id(args.fpga_id, args.job_id, api_key, api_url)
+    text = _client.get_logs(args.fpga_id, job_id, api_key, api_url)
     print(text)
 
 
 def cmd_cancel(args: argparse.Namespace) -> None:
     api_key, api_url = _creds(args)
-    _client.cancel_job(args.fpga_id, args.job_id, api_key, api_url)
-    print(f"cancelled {args.job_id}")
+    job_id = _resolve_job_id(args.fpga_id, args.job_id, api_key, api_url)
+    _client.cancel_job(args.fpga_id, job_id, api_key, api_url)
+    print(f"cancelled {job_id}")
 
 
 def cmd_reset(args: argparse.Namespace) -> None:
@@ -403,22 +443,25 @@ def main() -> None:
     st_p.add_argument("--json", action="store_true",
                       help="print the raw orchestrator response as JSON")
 
-    # job <fpga_id> <job_id>
+    # job <fpga_id> [job_id]
     job_p = sub.add_parser("job", parents=[common], help="show job status and metadata")
     job_p.add_argument("fpga_id", type=int)
-    job_p.add_argument("job_id")
+    job_p.add_argument("job_id", nargs="?", default=None,
+                       help="omit for the FPGA's current job")
     job_p.add_argument("--json", action="store_true",
                        help="print the raw orchestrator response as JSON")
 
-    # logs <fpga_id> <job_id>
+    # logs <fpga_id> [job_id]
     log_p = sub.add_parser("logs", parents=[common], help="print build logs for a job")
     log_p.add_argument("fpga_id", type=int)
-    log_p.add_argument("job_id")
+    log_p.add_argument("job_id", nargs="?", default=None,
+                       help="omit for the FPGA's current job")
 
-    # cancel <fpga_id> <job_id>
+    # cancel <fpga_id> [job_id]
     can_p = sub.add_parser("cancel", parents=[common], help="cancel a queued job")
     can_p.add_argument("fpga_id", type=int)
-    can_p.add_argument("job_id")
+    can_p.add_argument("job_id", nargs="?", default=None,
+                       help="omit for the FPGA's current job")
 
     # reset <fpga_id>
     res_p = sub.add_parser("reset", parents=[common],
