@@ -215,9 +215,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         sess = d.get("session") or {}
         print(f"\n  FPGA {d['fpga_id']}")
         print(f"  {'state:':<14} {_fmt_state(d['state'])}")
+        owner = d.get("owner")
+        print(f"  {'owner:':<14} {owner if owner else _c('-', _DIM)}")
         if sess:
             print(f"  {'session:':<14} {sess.get('session_id', '-')}")
-            print(f"  {'owner:':<14} {sess.get('owner', '-')}")
             print(f"  {'expires at:':<14} {sess.get('expires_at', '-')}")
         else:
             print(f"  {'session:':<14} {_c('-', _DIM)}")
@@ -236,8 +237,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(_c(header, _BOLD))
         print(_c(sep, _DIM))
         for d in fpgas:
-            sess  = d.get("session") or {}
-            owner = sess.get("owner", "-") if sess else "-"
+            owner = d.get("owner") or "-"
             cj    = d.get("current_job_id")
             print(
                 f"  {d['fpga_id']:>2}  "
