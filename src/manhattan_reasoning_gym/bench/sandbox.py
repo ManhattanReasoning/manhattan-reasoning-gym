@@ -162,8 +162,10 @@ class Sandbox:
             ``"dev"`` (trusted local poking), or a :class:`SandboxProfile`.
         silicon: ``"auto"`` (default: real cloud if a key is set, else a no-op),
             ``"cloud"``, ``"mock"``, or your own ``SiliconFn``.
-        api_key / api_url / sys_clk_freq: passed to the cloud silicon backend.
-            The key stays in this trusted process — never in the container.
+        api_key: passed to the cloud silicon backend. Stays in this trusted
+            process — never in the container.
+        api_url: passed to the cloud silicon backend.
+        sys_clk_freq: passed to the cloud silicon backend.
         guard: optional ``(design_bytes, report) -> reject-reason | None`` to vet
             promotes. Default ``None`` = every promote goes straight through.
         image: override the sandbox docker image.
