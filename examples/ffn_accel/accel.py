@@ -13,8 +13,9 @@ the host only quantizes, loads, and dequantizes.
 from __future__ import annotations
 
 import golden
-import manhattan_reasoning_gym as mrg
 import numpy as np
+
+import manhattan_reasoning_gym as mrg
 
 # Baked-in hardware shape (mirrors design.py). 4x hidden expansion, 8->32->8.
 M, K1, K2, N, TILE = 4, 8, 32, 8, 4

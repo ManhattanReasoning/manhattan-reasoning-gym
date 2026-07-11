@@ -11,8 +11,9 @@ the float reference. The MMIO driver lives in `accel.py`. Run `mrg login` first.
 
 import accel  # shared host-side driver (register map + load/run/verify)
 import golden
-import manhattan_reasoning_gym as mrg
 import numpy as np
+
+import manhattan_reasoning_gym as mrg
 
 app = mrg.cloud.App(
     "ffn_accel", design="examples/ffn_accel/design.py", registers=accel.Regs

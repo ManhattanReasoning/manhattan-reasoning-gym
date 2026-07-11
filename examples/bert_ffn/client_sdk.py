@@ -32,8 +32,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ffn_accel"))
 
 import accel  # noqa: E402  ffn_accel host-side MMIO driver
-import manhattan_reasoning_gym as mrg  # noqa: E402
 from model import BertBlock, Config  # noqa: E402
+
+import manhattan_reasoning_gym as mrg  # noqa: E402
 
 # Reuse the ffn_accel design + its register map. A BERT FFN sublayer is exactly
 # what this accelerator computes; dimensions are pinned to its 8->32->8 shape.
