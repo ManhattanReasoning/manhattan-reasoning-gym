@@ -1,10 +1,13 @@
-"""HTTP client for the Cloud FPGA orchestrator API."""
+"""HTTP (+ streaming WebSocket) client for the Cloud FPGA orchestrator API."""
 
 from __future__ import annotations
 
 import time
 
 import requests
+import websockets.sync.client
+
+from . import _wire
 
 DEFAULT_API_URL = "https://api.manhattanreasoning.com"
 _RUN_POLL_INTERVAL = 0.5
@@ -150,13 +153,24 @@ def read(
 
 
 def write(
-    fpga_id: int, api_key: str, address: int, words: list[int], api_url: str
+    fpga_id: int,
+    api_key: str,
+    address: int,
+    words: list[int],
+    api_url: str,
+    fixed_address: bool = False,
 ) -> None:
     url = f"{api_url}/fpga/{fpga_id}/run"
     resp = requests.post(
         url,
         headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-        json={"op": 1, "address": address, "data": words, "count": 0},
+        json={
+            "op": 1,
+            "address": address,
+            "data": words,
+            "count": 0,
+            "fixed_address": fixed_address,
+        },
     )
     resp.raise_for_status()
     _poll_run(fpga_id, resp.json()["job_id"], api_key, api_url)
@@ -246,3 +260,93 @@ def _poll_run(fpga_id: int, job_id: str, api_key: str, api_url: str) -> list[int
             raise RuntimeError(f"Run job {job_id!r} ended with status {status!r}")
         time.sleep(_RUN_POLL_INTERVAL)
     raise TimeoutError(f"Run job {job_id!r} did not complete in time")
+
+
+def _ws_url(api_url: str, fpga_id: int) -> str:
+    """Convert the orchestrator's http(s):// API URL to its /stream ws(s):// form."""
+    if api_url.startswith("https://"):
+        base = "wss://" + api_url[len("https://") :]
+    elif api_url.startswith("http://"):
+        base = "ws://" + api_url[len("http://") :]
+    else:
+        base = api_url
+    return f"{base}/fpga/{fpga_id}/stream"
+
+
+class Stream:
+    """A persistent, low-latency Wishbone session -- bypasses the job queue.
+
+    Every op on ``App.write()``/``App.read()`` dispatches its own job against
+    the cloud API and polls for completion every ``_RUN_POLL_INTERVAL``
+    seconds, so each one costs roughly that much wall-clock time regardless
+    of payload size. For a tight loop -- streaming a CNF instance in one
+    literal per write, an RL reward loop that loads and grades many episodes
+    per training step -- that per-op cost dominates. A Stream instead holds
+    one WebSocket open to the orchestrator (relayed straight through to the
+    FPGA's Wishbone bridge, bypassing the Redis job queue entirely) and pays
+    the connection cost once instead of once per op.
+
+    Use via ``App.stream()``, not directly::
+
+        with app:
+            with app.stream() as s:
+                for word in literals:
+                    s.write(LITERAL_IN, word, fixed_address=True)
+                s.write(REG_CTRL, 1)
+                while not (s.read(REG_CTRL) & 1):
+                    pass
+    """
+
+    def __init__(self, fpga_id: int, api_key: str, api_url: str) -> None:
+        self._conn = websockets.sync.client.connect(
+            _ws_url(api_url, fpga_id),
+            additional_headers={"X-API-Key": api_key},
+        )
+
+    def __enter__(self) -> Stream:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def write(
+        self, addr: int, value: int | list[int], fixed_address: bool = False
+    ) -> None:
+        """Write one or more 32-bit words to byte address ``addr``.
+
+        ``fixed_address=True`` repeats ``addr`` for every word instead of
+        incrementing it -- for a hardware FIFO/push-register port (a design
+        that keeps its own internal write_idx), where a normal burst would
+        scatter words across whatever registers happen to sit at
+        address+1, address+2, ...
+        """
+        words = [value] if isinstance(value, int) else value
+        request = _wire.WishboneRequest(
+            op=_wire.WishboneOp.WRITE,
+            address=addr,
+            data=words,
+            fixed_address=fixed_address,
+        )
+        response = self._transact(request)
+        if not response.ok:
+            raise RuntimeError(f"stream write to {addr:#x} failed")
+
+    def read(self, addr: int, count: int = 1) -> int | list[int]:
+        """Read ``count`` 32-bit words starting at byte address ``addr``."""
+        request = _wire.WishboneRequest(
+            op=_wire.WishboneOp.READ, address=addr, count=count
+        )
+        response = self._transact(request)
+        if not response.ok:
+            raise RuntimeError(f"stream read of {count} words at {addr:#x} failed")
+        return response.data[0] if count == 1 else response.data
+
+    def _transact(self, request: _wire.WishboneRequest) -> _wire.WishboneResponse:
+        self._conn.send(request.to_bytes())
+        raw = self._conn.recv()
+        if isinstance(raw, str):
+            raise RuntimeError("stream received an unexpected text frame")
+        return _wire.WishboneResponse.from_bytes(raw)

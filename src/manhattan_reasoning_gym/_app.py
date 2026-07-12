@@ -112,15 +112,36 @@ class App:
         data = _client.read(self.fpga_id, self.api_key, addr, count, self.api_url)
         return data[0] if count == 1 else data
 
-    def write(self, addr: int, value: int | list[int]) -> None:
+    def write(
+        self, addr: int, value: int | list[int], fixed_address: bool = False
+    ) -> None:
         """Write one or more 32-bit words to byte address ``addr``.
 
         *value* may be a single ``int`` or a ``list[int]`` for a burst write.
-        Programs the FPGA first if not already done.
+        ``fixed_address=True`` repeats ``addr`` for every word instead of
+        incrementing it -- for a hardware FIFO/push-register port (a design
+        that keeps its own internal write_idx), where a normal burst would
+        scatter words across whatever registers happen to sit at
+        address+1, address+2, ... Programs the FPGA first if not already done.
         """
         self._ensure_programmed()
         words = [value] if isinstance(value, int) else value
-        _client.write(self.fpga_id, self.api_key, addr, words, self.api_url)
+        _client.write(
+            self.fpga_id, self.api_key, addr, words, self.api_url,
+            fixed_address=fixed_address,
+        )
+
+    def stream(self) -> _client.Stream:
+        """Open a persistent, low-latency session for many small ops.
+
+        Unlike ``write()``/``read()``, ops on the returned ``Stream`` skip the
+        per-call job queue and poll loop -- use this for tight loops like
+        streaming a CNF instance in one literal per write, or an RL reward
+        loop that needs many ops per episode. Programs the FPGA first if not
+        already done.
+        """
+        self._ensure_programmed()
+        return _client.Stream(self.fpga_id, self.api_key, self.api_url)
 
     def _resolve_fpga(self) -> None:
         """Pick an idle FPGA if one wasn't pinned. Caches the choice on self."""
