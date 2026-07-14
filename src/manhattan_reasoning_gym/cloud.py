@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 
 from ._app import App, RegisterMap
-from ._client import NoFPGAAvailableError, Stream, get_session, release_session
+from ._client import Stream, get_session, release_session
 
 __all__ = [
     "App",
@@ -19,7 +19,6 @@ __all__ = [
     "Stream",
     "get_session",
     "release_session",
-    "NoFPGAAvailableError",
     "secret",
 ]
 

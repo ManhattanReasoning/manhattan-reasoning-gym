@@ -33,8 +33,6 @@ def _c(text: str, *codes: str) -> str:
 
 _STATE_COLOR = {
     "idle":         _GREEN,
-    "queued":       _YELLOW,
-    "building":     _YELLOW,
     "programming":  _YELLOW,
     "reserved":     _CYAN,
     "error":        _RED,
@@ -62,6 +60,11 @@ def _fmt_id(s: str | None) -> str:
         return _c("-", _DIM)
     # Show first 8 chars of UUID so rows stay narrow
     return _c(s[:8] + "…", _DIM)
+
+
+def _fmt_fpga(fpga_id: int | None) -> str:
+    # None means no board assigned yet -- still building, or waiting to flash.
+    return str(fpga_id) if fpga_id is not None else _c("-", _DIM)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -99,25 +102,6 @@ def _creds_optional(args: argparse.Namespace) -> tuple[str, str]:
         or ""
     )
     return api_key, api_url
-
-
-def _resolve_job_id(
-    fpga_id: int, job_id: str | None, api_key: str, api_url: str
-) -> str:
-    """Return job_id as given, or the board's current job if it was omitted.
-
-    Lets `mrg logs 0` / `mrg cancel 0` / `mrg job 0` work against whatever's
-    running right now without pasting a UUID -- current_job_id is already
-    tracked server-side, so this is one extra GET rather than any new local
-    state to keep in sync.
-    """
-    if job_id:
-        return job_id
-    fpga = _client.get_fpga(fpga_id, api_key, api_url)
-    current = fpga.get("current_job_id")
-    if not current:
-        sys.exit(f"error: FPGA {fpga_id} has no current job; pass a job_id")
-    return current
 
 
 def _load_user_module(path: str):
@@ -285,15 +269,43 @@ def cmd_status(args: argparse.Namespace) -> None:
         print()
 
 
+def cmd_jobs(args: argparse.Namespace) -> None:
+    api_key, api_url = _creds(args)
+    jobs = _client.list_jobs(api_key, api_url, status=args.status)
+    if args.json:
+        print(json.dumps(jobs, indent=2))
+        return
+    if not jobs:
+        print("\n  no jobs\n")
+        return
+    header = f"  {'JOB_ID':<10}  {'TYPE':<18}  {'STATUS':<10}  {'FPGA':<5}  CREATED"
+    sep    = "  " + "─" * (len(header) - 2)
+    print()
+    print(_c(header, _BOLD))
+    print(_c(sep, _DIM))
+    for d in jobs:
+        print(
+            f"  {_fmt_id(d['job_id']):<10}  "
+            f"{d['type']:<18}  "
+            f"{_fmt_status(d['status']):<10}  "
+            f"{_fmt_fpga(d.get('fpga_id')):<5}  "
+            f"{d['created_at']}"
+        )
+    print()
+
+
 def cmd_job(args: argparse.Namespace) -> None:
     api_key, api_url = _creds_optional(args)
-    job_id = _resolve_job_id(args.fpga_id, args.job_id, api_key, api_url)
-    d = _client.get_job(args.fpga_id, job_id, api_key, api_url)
+    d = _client.get_job(args.job_id, api_key, api_url)
     if args.json:
         print(json.dumps(d, indent=2))
         return
+    fpga_id = d["fpga_id"]
+    fpga_display = (
+        fpga_id if fpga_id is not None else _c("- (no board assigned yet)", _DIM)
+    )
     print(f"\n  {'job_id:':<14} {d['job_id']}")
-    print(f"  {'fpga_id:':<14} {d['fpga_id']}")
+    print(f"  {'fpga_id:':<14} {fpga_display}")
     print(f"  {'type:':<14} {d['type']}")
     print(f"  {'status:':<14} {_fmt_status(d['status'])}")
     print(f"  {'created at:':<14} {d['created_at']}")
@@ -303,16 +315,14 @@ def cmd_job(args: argparse.Namespace) -> None:
 
 def cmd_logs(args: argparse.Namespace) -> None:
     api_key, api_url = _creds_optional(args)
-    job_id = _resolve_job_id(args.fpga_id, args.job_id, api_key, api_url)
-    text = _client.get_logs(args.fpga_id, job_id, api_key, api_url)
+    text = _client.get_logs(args.job_id, api_key, api_url)
     print(text)
 
 
 def cmd_cancel(args: argparse.Namespace) -> None:
     api_key, api_url = _creds(args)
-    job_id = _resolve_job_id(args.fpga_id, args.job_id, api_key, api_url)
-    _client.cancel_job(args.fpga_id, job_id, api_key, api_url)
-    print(f"cancelled {job_id}")
+    _client.cancel_job(args.job_id, api_key, api_url)
+    print(f"cancelled {args.job_id}")
 
 
 def cmd_reset(args: argparse.Namespace) -> None:
@@ -443,25 +453,34 @@ def main() -> None:
     st_p.add_argument("--json", action="store_true",
                       help="print the raw orchestrator response as JSON")
 
-    # job <fpga_id> [job_id]
+    # jobs [--status] [--json]
+    jobs_p = sub.add_parser(
+        "jobs", parents=[common],
+        help="list your jobs (newest first) -- a build in flight has no "
+             "board yet, so this is the only way to find its job_id",
+    )
+    jobs_p.add_argument(
+        "--status", default=None,
+        choices=["queued", "running", "complete", "failed", "cancelled"],
+        help="only show jobs in this status (e.g. running = currently in "
+             "flight, building or flashing)",
+    )
+    jobs_p.add_argument("--json", action="store_true",
+                        help="print the raw orchestrator response as JSON")
+
+    # job <job_id>
     job_p = sub.add_parser("job", parents=[common], help="show job status and metadata")
-    job_p.add_argument("fpga_id", type=int)
-    job_p.add_argument("job_id", nargs="?", default=None,
-                       help="omit for the FPGA's current job")
+    job_p.add_argument("job_id")
     job_p.add_argument("--json", action="store_true",
                        help="print the raw orchestrator response as JSON")
 
-    # logs <fpga_id> [job_id]
+    # logs <job_id>
     log_p = sub.add_parser("logs", parents=[common], help="print build logs for a job")
-    log_p.add_argument("fpga_id", type=int)
-    log_p.add_argument("job_id", nargs="?", default=None,
-                       help="omit for the FPGA's current job")
+    log_p.add_argument("job_id")
 
-    # cancel <fpga_id> [job_id]
-    can_p = sub.add_parser("cancel", parents=[common], help="cancel a queued job")
-    can_p.add_argument("fpga_id", type=int)
-    can_p.add_argument("job_id", nargs="?", default=None,
-                       help="omit for the FPGA's current job")
+    # cancel <job_id>
+    can_p = sub.add_parser("cancel", parents=[common], help="cancel a job")
+    can_p.add_argument("job_id")
 
     # reset <fpga_id>
     res_p = sub.add_parser("reset", parents=[common],
@@ -492,6 +511,7 @@ def main() -> None:
         "logout": cmd_logout,
         "run":    cmd_run,
         "status": cmd_status,
+        "jobs":   cmd_jobs,
         "job":    cmd_job,
         "logs":   cmd_logs,
         "cancel": cmd_cancel,

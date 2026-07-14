@@ -43,11 +43,10 @@ __all__ = [
 # the package still loads with only build + sandbox present.
 try:
     from . import cloud
-    from ._client import NoFPGAAvailableError
     from .cloud import App, RegisterMap, get_session, release_session, secret
 
     __all__ += [
-        "cloud", "App", "RegisterMap", "NoFPGAAvailableError",
+        "cloud", "App", "RegisterMap",
         "get_session", "release_session", "secret",
     ]
 except ImportError:  # cloud stripped (sandbox image)
