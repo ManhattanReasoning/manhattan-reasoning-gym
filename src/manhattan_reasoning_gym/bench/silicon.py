@@ -3,8 +3,9 @@
 A ``SiliconFn`` the trusted side uses when a key is configured (otherwise the
 Sandbox falls back to a no-op). It holds the API key (never exposed to the
 untrusted container) and drives the
-existing SDK cloud path: pick an idle board -> submit (server builds) -> poll
-until programmed -> release. The design bytes come from the promote request.
+existing SDK cloud path: submit (server claims a build slot and builds) ->
+poll until a board is assigned and programmed -> release. The design bytes
+come from the promote request.
 
 Failure modes are returned as structured results (never raised) so one bad
 promote doesn't crash the broker loop:
@@ -20,6 +21,8 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+
+import requests
 
 
 class CloudSilicon:
@@ -47,34 +50,32 @@ class CloudSilicon:
 
         api_url = self.api_url or _client.DEFAULT_API_URL
 
-        try:
-            fpga_id = _client.find_idle_fpga(self.api_key, api_url)
-        except _client.NoFPGAAvailableError:
-            return {"status": "no_board", "note": "no idle FPGA available"}
-
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "design.py"
             path.write_bytes(design_bytes)
             try:
                 job_id = _client.submit(
-                    fpga_id, str(path), self.api_key, api_url,
+                    str(path), self.api_key, api_url,
                     sys_clk_freq=self.sys_clk_freq,
                 )
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 503:
+                    return {"status": "no_board", "note": "no build capacity available"}
+                return {"status": "submit_failed", "error": str(exc)[:2000]}
             except Exception as exc:
-                return {"status": "submit_failed", "fpga_id": fpga_id,
-                        "error": str(exc)[:2000]}
+                return {"status": "submit_failed", "error": str(exc)[:2000]}
 
             try:
-                _client.poll_job(
-                    fpga_id, job_id, self.api_key, api_url, timeout=self.poll_timeout
+                job = _client.poll_job(
+                    job_id, self.api_key, api_url, timeout=self.poll_timeout
                 )
             except RuntimeError as exc:  # build/program failed (carries logs)
-                return {"status": "build_failed", "fpga_id": fpga_id,
-                        "job_id": job_id, "error": str(exc)[:4000]}
+                return {"status": "build_failed", "job_id": job_id,
+                        "error": str(exc)[:4000]}
             except TimeoutError as exc:
-                return {"status": "timeout", "fpga_id": fpga_id,
-                        "job_id": job_id, "error": str(exc)}
+                return {"status": "timeout", "job_id": job_id, "error": str(exc)}
 
+            fpga_id = job["fpga_id"]
             result = {"status": "programmed", "fpga_id": fpga_id, "job_id": job_id}
 
         if self.release_after:
