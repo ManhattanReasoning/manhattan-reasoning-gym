@@ -15,35 +15,6 @@ _BUILD_POLL_INTERVAL = 2.0
 _ANIM_INTERVAL = 0.08  # spinner tick when a progress callback is attached
 
 
-class NoFPGAAvailableError(RuntimeError):
-    """Raised when no idle FPGA can be found to run on."""
-
-
-def find_idle_fpga(api_key: str, api_url: str) -> int:
-    """Return the id of an available (idle) FPGA.
-
-    Picks the lowest-numbered FPGA currently in the ``idle`` state. Raises
-    ``NoFPGAAvailableError`` if every FPGA is busy or otherwise unavailable.
-
-    Only as accurate as ``GET /fpga``: the orchestrator must expose just the
-    physically connected boards (set ``FPGA_IDS`` server-side), otherwise this
-    may select a phantom idle slot.
-    """
-    fpgas = list_fpgas(api_key, api_url)
-    idle = sorted(f["fpga_id"] for f in fpgas if f.get("state") == "idle")
-    if not idle:
-        current = ", ".join(
-            f"{f['fpga_id']}={f.get('state')}"
-            for f in sorted(fpgas, key=lambda f: f["fpga_id"])
-        ) or "no FPGAs reported"
-        raise NoFPGAAvailableError(
-            f"No idle FPGA available right now (current states: {current}).\n"
-            "  Wait for one to free up, or pin a board with "
-            "fpga_id=<n> / --fpga-id <n>."
-        )
-    return idle[0]
-
-
 def exchange_github_token(github_token: str, api_url: str) -> dict:
     """Exchange a GitHub token for an API key.
 
@@ -67,14 +38,21 @@ def revoke_key(api_key: str, api_url: str) -> None:
 
 
 def submit(
-    fpga_id: int,
     design_path: str,
     api_key: str,
     api_url: str,
     sys_clk_freq: int | None = None,
     timing_target_mhz: float | None = None,
 ) -> str:
-    url = f"{api_url}/fpga/{fpga_id}/submit"
+    """Submit a design for build_and_program and return its job id.
+
+    Never touches a board: the server claims a build slot (a network identity
+    baked into the bitstream) from a pool sized larger than the physical
+    fleet, so many builds run concurrently on Fargate. Which board ends up
+    running the design isn't known until the build finishes and some board's
+    worker claims it -- see ``poll_job``.
+    """
+    url = f"{api_url}/submit"
     # Optional multipart form fields; older servers simply ignore extra fields.
     # sys_clk_freq re-clocks the SoC (Hz); timing_target_mhz is the PnR/grading
     # constraint (MHz), sent only when the caller overrides the sys-clock default.
@@ -93,48 +71,50 @@ def submit(
 
 
 def poll_job(
-    fpga_id: int,
     job_id: str,
     api_key: str,
     api_url: str,
     timeout: float = 2400.0,
     on_poll=None,
-) -> None:
-    """Block until a job completes.
+) -> dict:
+    """Block until a job completes, and return the final job record.
 
     ``timeout`` is the wall-clock deadline in seconds. It defaults to 40 min so
     the client outlasts the orchestrator's gateware build ceiling
     (``BUILD_TIMEOUT_SECONDS``, 30 min by default) and surfaces the real
     ``complete``/``failed`` status instead of giving up mid-build.
 
-    If ``on_poll`` is given it's called as ``on_poll(status)`` on a fast tick
-    (~12/s) so callers can animate a spinner, while the job itself is only
-    queried every ``_BUILD_POLL_INTERVAL`` seconds.
+    If ``on_poll`` is given it's called as ``on_poll(status, fpga_id)`` on a
+    fast tick (~12/s) so callers can animate a spinner, while the job itself
+    is only queried every ``_BUILD_POLL_INTERVAL`` seconds. ``fpga_id`` is
+    None until a board is assigned (some board's worker has claimed the
+    finished build) -- for a build_and_program job that's anywhere from
+    submit through the build finishing on Fargate.
     """
-    url = f"{api_url}/fpga/{fpga_id}/jobs/{job_id}"
+    url = f"{api_url}/jobs/{job_id}"
     headers = {"X-API-Key": api_key}
     tick = _ANIM_INTERVAL if on_poll else _BUILD_POLL_INTERVAL
     deadline = time.monotonic() + timeout
     next_check = 0.0
-    status = "queued"
+    job = {"status": "queued", "fpga_id": None}
     while time.monotonic() < deadline:
         if time.monotonic() >= next_check:
             resp = requests.get(url, headers=headers)
             resp.raise_for_status()
-            status = resp.json()["status"]
+            job = resp.json()
             next_check = time.monotonic() + _BUILD_POLL_INTERVAL
-            if status == "complete":
+            if job["status"] == "complete":
                 if on_poll:
-                    on_poll(status)
-                return
-            if status in ("failed", "cancelled"):
+                    on_poll(job["status"], job["fpga_id"])
+                return job
+            if job["status"] in ("failed", "cancelled"):
                 logs_resp = requests.get(f"{url}/logs", headers=headers)
                 logs = logs_resp.text if logs_resp.ok else "no logs available"
                 raise RuntimeError(
-                    f"Job {job_id!r} ended with status {status!r}.\n{logs}"
+                    f"Job {job_id!r} ended with status {job['status']!r}.\n{logs}"
                 )
         if on_poll:
-            on_poll(status)
+            on_poll(job["status"], job["fpga_id"])
         time.sleep(tick)
     raise TimeoutError(f"Job {job_id!r} did not complete within {timeout}s")
 
@@ -149,7 +129,7 @@ def read(
         json={"op": 2, "address": address, "data": [], "count": count},
     )
     resp.raise_for_status()
-    return _poll_run(fpga_id, resp.json()["job_id"], api_key, api_url)
+    return _poll_run(resp.json()["job_id"], api_key, api_url)
 
 
 def write(
@@ -173,7 +153,7 @@ def write(
         },
     )
     resp.raise_for_status()
-    _poll_run(fpga_id, resp.json()["job_id"], api_key, api_url)
+    _poll_run(resp.json()["job_id"], api_key, api_url)
 
 
 def list_fpgas(api_key: str, api_url: str) -> list[dict]:
@@ -188,27 +168,38 @@ def get_fpga(fpga_id: int, api_key: str, api_url: str) -> dict:
     return resp.json()
 
 
-def get_job(fpga_id: int, job_id: str, api_key: str, api_url: str) -> dict:
+def get_job(job_id: str, api_key: str, api_url: str) -> dict:
     resp = requests.get(
-        f"{api_url}/fpga/{fpga_id}/jobs/{job_id}",
+        f"{api_url}/jobs/{job_id}",
         headers={"X-API-Key": api_key},
     )
     resp.raise_for_status()
     return resp.json()
 
 
-def get_logs(fpga_id: int, job_id: str, api_key: str, api_url: str) -> str:
+def list_jobs(api_key: str, api_url: str, status: str | None = None) -> list[dict]:
+    """Return every job the caller (the owner of ``api_key``) has submitted,
+    newest first. Pass ``status`` (e.g. ``"running"``) to filter."""
+    params = {"status": status} if status else None
     resp = requests.get(
-        f"{api_url}/fpga/{fpga_id}/jobs/{job_id}/logs",
+        f"{api_url}/jobs", headers={"X-API-Key": api_key}, params=params
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_logs(job_id: str, api_key: str, api_url: str) -> str:
+    resp = requests.get(
+        f"{api_url}/jobs/{job_id}/logs",
         headers={"X-API-Key": api_key},
     )
     resp.raise_for_status()
     return resp.text
 
 
-def cancel_job(fpga_id: int, job_id: str, api_key: str, api_url: str) -> None:
+def cancel_job(job_id: str, api_key: str, api_url: str) -> None:
     resp = requests.delete(
-        f"{api_url}/fpga/{fpga_id}/jobs/{job_id}",
+        f"{api_url}/jobs/{job_id}",
         headers={"X-API-Key": api_key},
     )
     resp.raise_for_status()
@@ -241,8 +232,8 @@ def reset_fpga(fpga_id: int, api_key: str, api_url: str) -> dict:
     return resp.json()
 
 
-def _poll_run(fpga_id: int, job_id: str, api_key: str, api_url: str) -> list[int]:
-    status_url = f"{api_url}/fpga/{fpga_id}/jobs/{job_id}"
+def _poll_run(job_id: str, api_key: str, api_url: str) -> list[int]:
+    status_url = f"{api_url}/jobs/{job_id}"
     result_url = f"{status_url}/result"
     headers = {"X-API-Key": api_key}
     for _ in range(120):

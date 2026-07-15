@@ -40,15 +40,6 @@ def _rainbow_code(step: int) -> int:
     """256-colour code for the given shimmer step (wraps around the loop)."""
     return _RAINBOW[step % len(_RAINBOW)]
 
-# Real orchestrator job statuses → human phase labels. {fid} is filled in.
-_PHASES = {
-    "queued": "queued",
-    "building": "building bitstream",
-    "programming": "flashing fpga{fid}",
-    "running": "running",
-    "complete": "complete",
-}
-
 _QUIPS = (
     "bribing the place-and-route gods",
     "convincing electrons to cooperate",
@@ -69,13 +60,19 @@ def _fmt_clock(seconds: float) -> str:
 
 
 class BuildProgress:
-    """Drives the live build line. Call ``update(status)`` often; then
-    ``finish()`` on success or ``abort()`` before raising on failure.
+    """Drives the live build line. Call ``update(status, fpga_id)`` often;
+    then ``finish(fpga_id)`` on success or ``abort()`` before raising on
+    failure.
+
+    No board is known at construction time -- a fresh build doesn't pick one,
+    the server assigns whichever frees up first once the build finishes (see
+    ``_app.App._program``) -- so ``fpga_id`` starts unset and is filled in
+    from whatever ``update``/``finish`` are called with.
     """
 
-    def __init__(self, name: str, fpga_id: int, stream: TextIO | None = None) -> None:
+    def __init__(self, name: str, stream: TextIO | None = None) -> None:
         self.name = name
-        self.fpga_id = fpga_id
+        self.fpga_id: int | None = None
         self.stream = stream or sys.stdout
         self.color = self.stream.isatty()
         self.start = time.monotonic()
@@ -87,14 +84,30 @@ class BuildProgress:
         return "".join(codes) + text + _RESET
 
     def _phase(self, status: str) -> str:
-        return _PHASES.get(status, status).format(fid=self.fpga_id)
+        """Human phase label for a raw job status, given what's known so far.
+
+        ``running`` covers both the Fargate build and the flash -- the two are
+        only distinguishable by whether a board has been assigned yet, since
+        that's the moment board assignment actually happens (see CLAUDE.md,
+        "Planned: decouple build concurrency from board count" in the
+        orchestrator repo).
+        """
+        if status == "running":
+            return (
+                f"flashing fpga{self.fpga_id}"
+                if self.fpga_id is not None
+                else "building bitstream"
+            )
+        return status
 
     def _shimmer(self, text: str, elapsed: float) -> str:
         """Wrap text in a slowly-cycling 256-colour code for a silly shimmer."""
         code = _rainbow_code(int(elapsed * _SHIMMER_SPEED))
         return f"\033[1m\033[38;5;{code}m{text}{_RESET}"
 
-    def update(self, status: str) -> None:
+    def update(self, status: str, fpga_id: int | None = None) -> None:
+        if fpga_id is not None:
+            self.fpga_id = fpga_id
         elapsed = time.monotonic() - self.start
         if not self.color:
             # Non-TTY: emit one line per phase change, no animation.
@@ -117,7 +130,9 @@ class BuildProgress:
         self.stream.write(line)
         self.stream.flush()
 
-    def finish(self) -> None:
+    def finish(self, fpga_id: int | None = None) -> None:
+        if fpga_id is not None:
+            self.fpga_id = fpga_id
         elapsed = time.monotonic() - self.start
         if self.color:
             self.stream.write(_CLEAR_LINE)

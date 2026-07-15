@@ -1,7 +1,7 @@
 import pytest
 
 import manhattan_reasoning_gym
-from manhattan_reasoning_gym import _app, _client
+from manhattan_reasoning_gym import _client
 
 
 @pytest.fixture(autouse=True)
@@ -11,80 +11,68 @@ def isolated_config(tmp_path, monkeypatch):
     return tmp_path
 
 
-# ── find_idle_fpga ───────────────────────────────────────────────────────────
-
-def test_find_idle_returns_lowest_idle(monkeypatch):
-    monkeypatch.setattr(_client, "list_fpgas", lambda k, u: [
-        {"fpga_id": 0, "state": "reserved"},
-        {"fpga_id": 1, "state": "idle"},
-        {"fpga_id": 2, "state": "idle"},
-    ])
-    assert _client.find_idle_fpga("k", "u") == 1
-
-
-def test_find_idle_raises_when_none_idle(monkeypatch):
-    monkeypatch.setattr(_client, "list_fpgas", lambda k, u: [
-        {"fpga_id": 0, "state": "reserved"},
-        {"fpga_id": 1, "state": "building"},
-    ])
-    with pytest.raises(_client.NoFPGAAvailableError) as exc:
-        _client.find_idle_fpga("k", "u")
-    # The error should be actionable: list current states.
-    assert "0=reserved" in str(exc.value)
+# ── App board discovery ──────────────────────────────────────────────────────
+#
+# A fresh build never picks a board itself -- the server assigns whichever one
+# frees up first once the build finishes, dispatching it inline against a
+# build slot (not a board) at submit time. So there's nothing to pin or
+# auto-select before building; app.fpga_id is discovered from the completed
+# job, not chosen. fpga_id is still a meaningful App() argument for the
+# --no-program reconnect case (skip building, talk to a board you already
+# have a session on), which these tests also cover.
 
 
-def test_find_idle_raises_on_empty_list(monkeypatch):
-    monkeypatch.setattr(_client, "list_fpgas", lambda k, u: [])
-    with pytest.raises(_client.NoFPGAAvailableError):
-        _client.find_idle_fpga("k", "u")
-
-
-def test_error_is_exported():
-    assert manhattan_reasoning_gym.NoFPGAAvailableError is _client.NoFPGAAvailableError
-
-
-# ── App auto-selection ───────────────────────────────────────────────────────
-
-def test_program_auto_selects_when_unpinned(monkeypatch):
-    calls = {}
-
-    def fake_submit(fpga_id, *a, **kw):
-        calls["submit_fpga_id"] = fpga_id
-        return "job"
-
-    monkeypatch.setattr(_client, "find_idle_fpga", lambda k, u: 2)
-    monkeypatch.setattr(_client, "submit", fake_submit)
-    monkeypatch.setattr(_client, "poll_job", lambda *a, **kw: None)
+def test_fpga_id_is_none_until_programmed(monkeypatch):
+    monkeypatch.setattr(_client, "submit", lambda *a, **kw: "job")
+    monkeypatch.setattr(
+        _client, "poll_job", lambda *a, **kw: {"status": "complete", "fpga_id": 2}
+    )
 
     app = manhattan_reasoning_gym.App("x", design="d.py")
     assert app.fpga_id is None
     app._program()
 
     assert app.fpga_id == 2
-    # submit() must have been called with the resolved id, not None.
-    assert calls["submit_fpga_id"] == 2
 
 
-def test_program_keeps_pinned_id(monkeypatch):
+def test_submit_is_never_given_a_board(monkeypatch):
+    calls = {}
+
+    def fake_submit(design_path, api_key, api_url, **kw):
+        calls["design_path"] = design_path
+        return "job"
+
+    monkeypatch.setattr(_client, "submit", fake_submit)
     monkeypatch.setattr(
-        _client, "find_idle_fpga",
-        lambda k, u: (_ for _ in ()).throw(AssertionError("should not auto-select")),
+        _client, "poll_job", lambda *a, **kw: {"status": "complete", "fpga_id": 4}
     )
-    monkeypatch.setattr(_client, "submit", lambda *a, **kw: "job")
-    monkeypatch.setattr(_client, "poll_job", lambda *a, **kw: None)
 
-    app = manhattan_reasoning_gym.App("x", design="d.py", fpga_id=5)
+    app = manhattan_reasoning_gym.App("x", design="d.py")
     app._program()
+
+    assert calls["design_path"] == "d.py"
+    assert app.fpga_id == 4
+
+
+def test_pinned_fpga_id_is_overwritten_once_a_build_runs(monkeypatch):
+    """fpga_id passed to App() is for --no-program reconnect, not a build hint
+    -- a build that does run must still overwrite it with the real board."""
+    monkeypatch.setattr(_client, "submit", lambda *a, **kw: "job")
+    monkeypatch.setattr(
+        _client, "poll_job", lambda *a, **kw: {"status": "complete", "fpga_id": 5}
+    )
+
+    app = manhattan_reasoning_gym.App("x", design="d.py", fpga_id=3)
+    app._program()
+
     assert app.fpga_id == 5
 
 
-def test_resolve_is_cached(monkeypatch):
-    seq = iter([3, 4])
-    monkeypatch.setattr(_app._client, "find_idle_fpga", lambda k, u: next(seq))
-    app = manhattan_reasoning_gym.App("x", design="d.py")
-    app._resolve_fpga()
-    app._resolve_fpga()  # second call must not re-pick
-    assert app.fpga_id == 3
+def test_unprogrammed_pin_survives_with_no_program():
+    """The --no-program reconnect path never calls _program() at all, so a
+    pinned id must be left exactly as given."""
+    app = manhattan_reasoning_gym.App("x", design="d.py", fpga_id=7)
+    assert app.fpga_id == 7
 
 
 # ── timing-target plumbing ───────────────────────────────────────────────────
@@ -92,16 +80,16 @@ def test_resolve_is_cached(monkeypatch):
 def test_app_forwards_timing_target_to_submit(monkeypatch):
     calls = {}
 
-    def fake_submit(fpga_id, design, api_key, api_url, **kw):
+    def fake_submit(design_path, api_key, api_url, **kw):
         calls.update(kw)
         return "job"
 
     monkeypatch.setattr(_client, "submit", fake_submit)
-    monkeypatch.setattr(_client, "poll_job", lambda *a, **kw: None)
-
-    app = manhattan_reasoning_gym.App(
-        "x", design="d.py", fpga_id=1, timing_target_mhz=90
+    monkeypatch.setattr(
+        _client, "poll_job", lambda *a, **kw: {"status": "complete", "fpga_id": 1}
     )
+
+    app = manhattan_reasoning_gym.App("x", design="d.py", timing_target_mhz=90)
     app._program()
     assert calls["timing_target_mhz"] == 90
 
@@ -130,9 +118,9 @@ def test_submit_sends_timing_target_form_field(monkeypatch, tmp_path):
 
     monkeypatch.setattr(_client.requests, "post", fake_post)
 
-    _client.submit(1, str(design), "k", "u", timing_target_mhz=90)
+    _client.submit(str(design), "k", "u", timing_target_mhz=90)
     assert seen["data"] == {"timing_target_mhz": "90"}
 
     # Nothing set => no form body at all (older servers get an unchanged request).
-    _client.submit(1, str(design), "k", "u")
+    _client.submit(str(design), "k", "u")
     assert seen["data"] is None

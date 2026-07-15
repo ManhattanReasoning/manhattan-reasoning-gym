@@ -29,8 +29,12 @@ class App:
     ``$MRG_API_KEY`` > the key stored by ``mrg login``), so it
     usually doesn't need to be passed explicitly.
 
-    ``fpga_id`` is optional: leave it unset (or pass ``None``) to let the SDK
-    pick an idle FPGA at program time, or pin a specific board by passing an id.
+    ``fpga_id`` is optional and normally left unset -- a fresh build never
+    picks a board itself, the server assigns whichever one frees up first once
+    the build finishes, and this fills in automatically once ``_program()``
+    completes. Pass it explicitly only to reconnect to a board you already
+    have a live session on without rebuilding (``mrg run --no-program
+    --fpga-id N`` / ``App(..., fpga_id=N)`` with programming skipped).
 
     Typical usage::
 
@@ -143,28 +147,29 @@ class App:
         self._ensure_programmed()
         return _client.Stream(self.fpga_id, self.api_key, self.api_url)
 
-    def _resolve_fpga(self) -> None:
-        """Pick an idle FPGA if one wasn't pinned. Caches the choice on self."""
-        if self.fpga_id is None:
-            self.fpga_id = _client.find_idle_fpga(self.api_key, self.api_url)
-            _progress.note(f"picked idle fpga{self.fpga_id}")
-
     def _program(self) -> None:
-        self._resolve_fpga()
+        """Submit the design and block until it's built and flashed.
+
+        No board is chosen up front: the server assigns one once the build
+        finishes and some board's worker is ready to flash it. ``self.fpga_id``
+        is set from the completed job, not decided here -- it's discovered,
+        not picked.
+        """
         job_id = _client.submit(
-            self.fpga_id, self.design, self.api_key, self.api_url,
+            self.design, self.api_key, self.api_url,
             sys_clk_freq=self.sys_clk_freq,
             timing_target_mhz=self.timing_target_mhz,
         )
-        bar = _progress.BuildProgress(self.name, self.fpga_id)
+        bar = _progress.BuildProgress(self.name)
         try:
-            _client.poll_job(
-                self.fpga_id, job_id, self.api_key, self.api_url, on_poll=bar.update
+            job = _client.poll_job(
+                job_id, self.api_key, self.api_url, on_poll=bar.update
             )
         except BaseException:
             bar.abort()
             raise
-        bar.finish()
+        self.fpga_id = job["fpga_id"]
+        bar.finish(self.fpga_id)
         self._programmed = True
 
     def release(self) -> str:

@@ -49,8 +49,10 @@ mrg reset 0                   # free the board when done (async, ~1 min)
   the base SoC (~1 min); poll `mrg status --json` rather than expecting
   instant `idle`.
 - `mrg synth` / `mrg pnr` print machine-readable JSON on stdout and exit
-  non-zero when the build fails; `mrg status --json` and `mrg job --json`
-  emit the raw orchestrator response — parse JSON, don't scrape tables.
+  non-zero when the build fails; `mrg status --json`, `mrg jobs --json`, and
+  `mrg job --json` emit the raw orchestrator response — parse JSON, don't
+  scrape tables. A build in flight has no board yet (see below), so
+  `mrg jobs` is the only way to find its `job_id` without already having it.
 - Rough time budget: `synth` seconds · `pnr` tens of seconds · `mrg run`
   ~2-3 min for the first program · `--no-program` seconds · `reset` ~1 min.
 - `mrg login` with no flags is an interactive GitHub device flow. Headless,
@@ -160,10 +162,12 @@ mrg login | logout
 mrg synth <design.py>                       # local synthesis report
 mrg pnr   <design.py> [--sys-clk-mhz N] [--timing-target-mhz N] [--target-mhz N]
                                             # local full-SoC place & route
-mrg run   <file.py> [--fpga-id N] [--no-program]
+mrg run   <file.py> [--no-program [--fpga-id N]]   # --fpga-id only meaningful with --no-program:
+                                                     # a fresh build is never pinned to a board
 mrg status [fpga_id] [--json]
-mrg job <fpga_id> <job_id> [--json]
-mrg logs | cancel <fpga_id> <job_id>
+mrg jobs [--status queued|running|complete|failed|cancelled] [--json]
+mrg job <job_id> [--json]
+mrg logs | cancel <job_id>
 mrg reset <fpga_id>
 mrg read  <fpga_id> <addr> [--count N]
 mrg write <fpga_id> <addr> <value>
