@@ -202,6 +202,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         app.sys_clk_freq = args.sys_clk_freq
     if args.timing_target_mhz is not None:
         app.timing_target_mhz = args.timing_target_mhz
+    if args.top is not None:
+        app.top = args.top
     if args.api_url:
         app.api_url = args.api_url
     if args.api_key:
@@ -350,10 +352,11 @@ def _local_report(mode: str, args: argparse.Namespace) -> None:
 
     try:
         if mode == "synth":
-            rep = _local_build.synth(args.design)
+            rep = _local_build.synth(args.design, top=args.top)
         else:
             rep = _local_build.pnr(
                 args.design,
+                top=args.top,
                 target_mhz=args.target_mhz,
                 sys_clk_mhz=args.sys_clk_mhz,
                 timing_target_mhz=args.timing_target_mhz,
@@ -424,18 +427,37 @@ def main() -> None:
                        dest="timing_target_mhz", metavar="MHZ",
                        help="override the PnR/grading timing target in MHz "
                             "(default: the sys clock)")
+    run_p.add_argument("--top", default=None,
+                       help="override the Verilog top-module disambiguator "
+                            "set in the file (ignored for an Amaranth design)")
 
-    # synth <design.py>  — local, no cloud
+    # synth <design.py|design.v>  — local, no cloud
     synth_p = sub.add_parser(
         "synth", help="local synthesis report (resource util) — no cloud/board"
     )
-    synth_p.add_argument("design", help="user Amaranth design.py")
+    synth_p.add_argument(
+        "design", help="user Amaranth design.py or plain Verilog design.v"
+    )
+    synth_p.add_argument(
+        "--top", default=None,
+        help="Verilog-only top-module disambiguator (ignored for Amaranth); "
+        "only needed when the file has more than one module exposing the "
+        "Wishbone contract — otherwise auto-detected",
+    )
 
-    # pnr <design.py>  — local, no cloud
+    # pnr <design.py|design.v>  — local, no cloud
     pnr_p = sub.add_parser(
         "pnr", help="local full-SoC place-and-route report (Fmax/timing/util)"
     )
-    pnr_p.add_argument("design", help="user Amaranth design.py")
+    pnr_p.add_argument(
+        "design", help="user Amaranth design.py or plain Verilog design.v"
+    )
+    pnr_p.add_argument(
+        "--top", default=None,
+        help="Verilog-only top-module disambiguator (ignored for Amaranth); "
+        "only needed when the file has more than one module exposing the "
+        "Wishbone contract — otherwise auto-detected",
+    )
     pnr_p.add_argument("--target-mhz", type=float, default=None, dest="target_mhz",
                        help="legacy alias: sets both the SoC clock and timing target")
     pnr_p.add_argument("--sys-clk-mhz", type=float, default=None, dest="sys_clk_mhz",

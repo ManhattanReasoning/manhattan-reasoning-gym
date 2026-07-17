@@ -119,6 +119,51 @@ def test_docker_backend_forwards_new_flags_when_set(monkeypatch, tmp_path):
     assert "--target-mhz" not in cmd
 
 
+def test_in_process_forwards_top(monkeypatch):
+    """top= (Verilog disambiguator) reaches mrg_build.build for both modes."""
+    calls = {}
+    fake = types.ModuleType("mrg_build")
+
+    class _Rep:
+        def to_dict(self):
+            return _REPORT
+
+    def build(**kwargs):
+        calls.update(kwargs)
+        return _Rep()
+
+    fake.build = build
+    monkeypatch.setitem(sys.modules, "mrg_build", fake)
+
+    _local_build.synth("design.v", top="echo_slave")
+    assert calls["top"] == "echo_slave"
+
+    _local_build.pnr("design.v", top="echo_slave")
+    assert calls["top"] == "echo_slave"
+
+
+def test_docker_backend_forwards_top_when_set(monkeypatch, tmp_path):
+    """--top reaches the docker command when given, absent otherwise."""
+    monkeypatch.setattr(_local_build, "_have_local_toolchain", lambda: False)
+    monkeypatch.setattr(_local_build.shutil, "which", lambda name: "/usr/bin/docker")
+
+    design = tmp_path / "design.v"
+    design.write_text("module m; endmodule\n")
+    seen = {}
+
+    def fake_run(cmd, capture_output, text):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(_REPORT), "")
+
+    monkeypatch.setattr(_local_build.subprocess, "run", fake_run)
+
+    _local_build.synth(design, top="echo_slave")
+    assert "--top" in seen["cmd"] and "echo_slave" in seen["cmd"]
+
+    _local_build.synth(design)
+    assert "--top" not in seen["cmd"]
+
+
 def test_raises_when_neither_backend_available(monkeypatch, tmp_path):
     monkeypatch.setattr(_local_build, "_have_local_toolchain", lambda: False)
     monkeypatch.setattr(_local_build.shutil, "which", lambda name: None)
