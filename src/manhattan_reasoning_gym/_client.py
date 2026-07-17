@@ -41,6 +41,7 @@ def submit(
     design_path: str,
     api_key: str,
     api_url: str,
+    top: str | None = None,
     sys_clk_freq: int | None = None,
     timing_target_mhz: float | None = None,
 ) -> str:
@@ -51,12 +52,20 @@ def submit(
     fleet, so many builds run concurrently on Fargate. Which board ends up
     running the design isn't known until the build finishes and some board's
     worker claims it -- see ``poll_job``.
+
+    ``design_path``'s extension picks the language server-side (.py ->
+    Amaranth, .v -> plain Verilog); ``top`` is a Verilog-only top-module
+    disambiguator (ignored for Amaranth), only needed when the file has more
+    than one module exposing the required Wishbone contract.
     """
     url = f"{api_url}/submit"
     # Optional multipart form fields; older servers simply ignore extra fields.
-    # sys_clk_freq re-clocks the SoC (Hz); timing_target_mhz is the PnR/grading
-    # constraint (MHz), sent only when the caller overrides the sys-clock default.
+    # top disambiguates a Verilog design's top module; sys_clk_freq re-clocks
+    # the SoC (Hz); timing_target_mhz is the PnR/grading constraint (MHz),
+    # sent only when the caller overrides the sys-clock default.
     data = {}
+    if top:
+        data["top"] = top
     if sys_clk_freq:
         data["sys_clk_freq"] = str(sys_clk_freq)
     if timing_target_mhz:

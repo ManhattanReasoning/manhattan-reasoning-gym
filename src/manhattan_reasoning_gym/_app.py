@@ -58,6 +58,7 @@ class App:
         name: str,
         *,
         design: str,
+        top: str | None = None,
         fpga_id: int | None = None,
         registers: type[RegisterMap] | None = None,
         api_key: str | None = None,
@@ -67,6 +68,10 @@ class App:
     ) -> None:
         self.name = name
         self.design = design
+        # Verilog-only top-module disambiguator (ignored for an Amaranth
+        # design); only needed when the file has more than one module
+        # exposing the Wishbone contract -- otherwise auto-detected.
+        self.top = top
         self.fpga_id = fpga_id
         self.registers = registers
         self.api_url = api_url
@@ -157,6 +162,7 @@ class App:
         """
         job_id = _client.submit(
             self.design, self.api_key, self.api_url,
+            top=self.top,
             sys_clk_freq=self.sys_clk_freq,
             timing_target_mhz=self.timing_target_mhz,
         )
