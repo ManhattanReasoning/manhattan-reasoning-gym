@@ -65,9 +65,15 @@ class App:
         api_url: str = _client.DEFAULT_API_URL,
         sys_clk_freq: int | None = None,
         timing_target_mhz: float | None = None,
+        poll_timeout: float | None = None,
     ) -> None:
         self.name = name
         self.design = design
+        # How long _program() waits for a build before giving up. None takes
+        # _client.DEFAULT_POLL_TIMEOUT, which is sized to outlast the server's
+        # own build ceiling. Raise it only if your designs build slower than
+        # that; lowering it risks abandoning builds that would have succeeded.
+        self.poll_timeout = poll_timeout
         # Verilog-only top-module disambiguator (ignored for an Amaranth
         # design); only needed when the file has more than one module
         # exposing the Wishbone contract -- otherwise auto-detected.
@@ -169,7 +175,9 @@ class App:
         bar = _progress.BuildProgress(self.name)
         try:
             job = _client.poll_job(
-                job_id, self.api_key, self.api_url, on_poll=bar.update
+                job_id, self.api_key, self.api_url,
+                timeout=self.poll_timeout,
+                on_poll=bar.update,
             )
         except BaseException:
             bar.abort()

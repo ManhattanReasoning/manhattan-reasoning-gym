@@ -115,3 +115,59 @@ def test_poll_job_still_works_without_callback(monkeypatch):
     monkeypatch.setattr(_client.requests, "get", lambda *a, **k: _Resp("complete"))
     # Should simply return the final job record when on_poll is omitted.
     assert _client.poll_job("j", "k", "u") == {"status": "complete", "fpga_id": None}
+
+
+# ── poll deadline vs. the server's build ceiling ─────────────────────────────
+#
+# The client deadline has to outlast the server's, or we abandon builds that go
+# on to succeed. That invariant lived only in a docstring and silently broke
+# when the build image raised BUILD_TIMEOUT_SECONDS 1800 -> 5400 while the SDK
+# stayed at 2400 s, discarding good 40-55 min builds. These pin it down.
+
+# What the deployed build image (infra/fargate/Dockerfile in the cloud repo)
+# actually allows: three pre-gateware stages at BUILD_SYNTH_TIMEOUT_SECONDS,
+# then place-and-route at BUILD_TIMEOUT_SECONDS. Update alongside that image.
+_SERVER_BUILD_CEILING = 3 * 1800 + 5400  # 10800 s = 3 h
+
+
+def test_default_poll_timeout_outlasts_server_build_ceiling():
+    assert _client.DEFAULT_POLL_TIMEOUT > _SERVER_BUILD_CEILING, (
+        "poll deadline is shorter than the server's own build ceiling, so the "
+        "client will abandon builds that later succeed"
+    )
+
+
+def test_poll_job_default_timeout_is_the_module_default(monkeypatch):
+    monkeypatch.setattr(_client.requests, "get", lambda *a, **k: _Resp("building"))
+    monkeypatch.setattr(_client.time, "sleep", lambda *_: None)
+    # Freeze the clock past the deadline so we can read which one was used.
+    clock = iter([0.0, 0.0, 0.0, _client.DEFAULT_POLL_TIMEOUT + 1])
+    monkeypatch.setattr(_client.time, "monotonic", lambda: next(clock, 1e9))
+    with pytest.raises(TimeoutError, match=str(int(_client.DEFAULT_POLL_TIMEOUT))):
+        _client.poll_job("j", "k", "u", timeout=None)
+
+
+def test_timeout_message_says_the_build_was_not_cancelled(monkeypatch):
+    monkeypatch.setattr(_client.requests, "get", lambda *a, **k: _Resp("building"))
+    monkeypatch.setattr(_client.time, "sleep", lambda *_: None)
+    clock = iter([0.0, 0.0, 0.0, 99.0])
+    monkeypatch.setattr(_client.time, "monotonic", lambda: next(clock, 1e9))
+    with pytest.raises(TimeoutError, match="NOT been cancelled"):
+        _client.poll_job("j", "k", "u", timeout=1.0)
+
+
+def test_app_passes_its_poll_timeout_through(monkeypatch):
+    import manhattan_reasoning_gym as mrg
+
+    seen = {}
+
+    def fake_poll(job_id, api_key, api_url, timeout=None, on_poll=None):
+        seen["timeout"] = timeout
+        return {"status": "complete", "fpga_id": 3}
+
+    monkeypatch.setattr(_client, "submit", lambda *a, **k: "job-1")
+    monkeypatch.setattr(_client, "poll_job", fake_poll)
+
+    app = mrg.App("t", design="d.py", api_key="k", poll_timeout=7200.0)
+    app._program()
+    assert seen["timeout"] == 7200.0

@@ -35,7 +35,7 @@ class CloudSilicon:
         *,
         sys_clk_freq: int | None = None,
         release_after: bool = True,
-        poll_timeout: float = 2400.0,
+        poll_timeout: float | None = None,
     ) -> None:
         self.api_key = api_key
         self.api_url = api_url
