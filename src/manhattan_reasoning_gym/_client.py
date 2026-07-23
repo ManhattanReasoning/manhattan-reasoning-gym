@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 import requests
@@ -13,6 +14,29 @@ DEFAULT_API_URL = "https://api.manhattanreasoning.com"
 _RUN_POLL_INTERVAL = 0.5
 _BUILD_POLL_INTERVAL = 2.0
 _ANIM_INTERVAL = 0.08  # spinner tick when a progress callback is attached
+
+# Wall-clock deadline for poll_job. This has to outlast the *server's* own build
+# ceiling, or the client abandons builds that go on to succeed -- throwing away
+# a good bitstream and, if a board was already assigned, programming it for
+# nothing.
+#
+# The server's ceiling is not one number. A build runs four sequentially timed
+# stages (orchestrator compiler/stages.py): design export, SoC header
+# generation, and firmware compile each get BUILD_SYNTH_TIMEOUT_SECONDS, then
+# place-and-route gets BUILD_TIMEOUT_SECONDS. The deployed build image
+# (infra/fargate/Dockerfile) sets 1800 and 5400, so the real worst case is
+# 3*1800 + 5400 = 10800 s (3 h) of build alone, before any time spent queued
+# for one of the finite build slots or waiting for a board to free up to flash.
+#
+# 4 h leaves ~1 h of margin over that for queueing and flashing. Being too
+# generous only costs a wedged client some extra waiting -- with a live status
+# in the progress bar and Ctrl-C always available -- whereas being too tight
+# silently discards completed work, which is the failure this default exists to
+# prevent. Override per call, per App(poll_timeout=...), or with $MRG_POLL_TIMEOUT.
+#
+# NOTE: if you change BUILD_TIMEOUT_SECONDS or BUILD_SYNTH_TIMEOUT_SECONDS in
+# the build image, this is the other half of that change.
+DEFAULT_POLL_TIMEOUT = float(os.environ.get("MRG_POLL_TIMEOUT", 14400.0))
 
 
 def exchange_github_token(github_token: str, api_url: str) -> dict:
@@ -83,15 +107,21 @@ def poll_job(
     job_id: str,
     api_key: str,
     api_url: str,
-    timeout: float = 2400.0,
+    timeout: float | None = None,
     on_poll=None,
 ) -> dict:
     """Block until a job completes, and return the final job record.
 
-    ``timeout`` is the wall-clock deadline in seconds. It defaults to 40 min so
-    the client outlasts the orchestrator's gateware build ceiling
-    (``BUILD_TIMEOUT_SECONDS``, 30 min by default) and surfaces the real
-    ``complete``/``failed`` status instead of giving up mid-build.
+    ``timeout`` is the wall-clock deadline in seconds; ``None`` uses
+    ``DEFAULT_POLL_TIMEOUT`` (see there for how it's derived from the server's
+    build ceiling). The point of the default is that the client outlasts the
+    server, so this surfaces the real ``complete``/``failed`` status rather
+    than giving up on a build that is still running and may yet succeed.
+
+    The server is the authority on when a build has taken too long -- it
+    enforces its own per-stage ceilings and marks the job ``failed``. This
+    deadline is only a backstop for a server that has gone away or a job that
+    has wedged, so erring long is deliberate.
 
     If ``on_poll`` is given it's called as ``on_poll(status, fpga_id)`` on a
     fast tick (~12/s) so callers can animate a spinner, while the job itself
@@ -100,6 +130,8 @@ def poll_job(
     finished build) -- for a build_and_program job that's anywhere from
     submit through the build finishing on Fargate.
     """
+    if timeout is None:
+        timeout = DEFAULT_POLL_TIMEOUT
     url = f"{api_url}/jobs/{job_id}"
     headers = {"X-API-Key": api_key}
     tick = _ANIM_INTERVAL if on_poll else _BUILD_POLL_INTERVAL
@@ -125,7 +157,16 @@ def poll_job(
         if on_poll:
             on_poll(job["status"], job["fpga_id"])
         time.sleep(tick)
-    raise TimeoutError(f"Job {job_id!r} did not complete within {timeout}s")
+    # Giving up here says nothing about the job: the server keeps building, and
+    # this one may still complete. Say so, so a timeout isn't misread as a
+    # failed build (and so the id needed to recover it isn't buried in a log).
+    raise TimeoutError(
+        f"Job {job_id!r} was still {job['status']!r} after {timeout}s, so this "
+        f"client stopped waiting. The build has NOT been cancelled and may "
+        f"still complete -- check `mrg jobs` or GET /jobs/{job_id}. If builds "
+        f"legitimately take this long, raise the deadline with "
+        f"$MRG_POLL_TIMEOUT or App(poll_timeout=...)."
+    )
 
 
 def read(
