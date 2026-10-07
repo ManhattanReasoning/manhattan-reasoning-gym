@@ -12,6 +12,8 @@ import time
 import pytest
 import websockets.sync.server
 
+import manhattan_reasoning_gym as mrg
+from manhattan_reasoning_gym import _app as _app_mod
 from manhattan_reasoning_gym import _transport
 from manhattan_reasoning_gym._client import _ws_url
 
@@ -482,3 +484,132 @@ def test_threads_sharing_a_transport_get_their_own_replies(server, transports):
     assert results[0] == [0x1000 + 4 * i for i in range(50)]
     assert results[1] == [0x2000 + 4 * i for i in range(50)]
     assert len(server.paths) == 1
+
+
+# -- App ------------------------------------------------------------------------
+
+
+def _make_app(monkeypatch, tmp_path, *, api_url, **kwargs):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("MRG_API_KEY", raising=False)
+    monkeypatch.delenv("MRG_TRANSPORT", raising=False)
+    app = mrg.App(
+        "x", design="d.py", fpga_id=7, api_key="k", api_url=api_url, **kwargs
+    )
+    app._programmed = True  # skip the real build/program flow
+    return app
+
+
+@pytest.fixture
+def no_release(monkeypatch):
+    """Stand in for the server's session release (the board reset job)."""
+    calls = []
+    monkeypatch.setattr(
+        _app_mod._client, "release_session",
+        lambda *args: calls.append(args) or "job-1",
+    )
+    return calls
+
+
+def test_app_uses_a_websocket_by_default(
+    server, monkeypatch, tmp_path, no_release
+):
+    app = _make_app(monkeypatch, tmp_path, api_url=server.http_url)
+    with app:
+        app.write(0x0, 1)
+        app.write(0x4, [2, 3])
+        assert app.read(0x8) == 0x8  # one word comes back as an int
+        assert app.read(0x8, count=2) == [0x8, 0xC]
+    assert server.paths == ["/fpga/7/stream"]  # one socket for all four calls
+    assert len(server.requests) == 4
+
+
+def test_app_http_transport_never_opens_a_socket(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        _transport._client, "read", lambda *a, **k: calls.append(("read", a)) or [42]
+    )
+    monkeypatch.setattr(
+        _transport._client, "write", lambda *a, **k: calls.append(("write", a, k))
+    )
+
+    def no_socket(*args, **kwargs):
+        raise AssertionError("opened a WebSocket")
+
+    monkeypatch.setattr(_transport.websockets.sync.client, "connect", no_socket)
+    app = _make_app(
+        monkeypatch, tmp_path, api_url="https://api.example", transport="http"
+    )
+    assert app.read(0x8) == 42
+    app.write(0x10, 5, fixed_address=True)
+    assert calls[0] == ("read", (7, "k", 0x8, 1, "https://api.example"))
+    assert calls[1] == (
+        "write", (7, "k", 0x10, [5], "https://api.example"), {"fixed_address": True}
+    )
+
+
+def test_app_transport_from_env(monkeypatch):
+    monkeypatch.setenv("MRG_TRANSPORT", "http")
+    assert mrg.App("x", design="d.py", api_key="k").transport == "http"
+
+
+def test_app_rejects_unknown_transport(monkeypatch):
+    monkeypatch.delenv("MRG_TRANSPORT", raising=False)
+    with pytest.raises(ValueError, match="expected 'websocket' or 'http'"):
+        mrg.App("x", design="d.py", api_key="k", transport="ftp")
+
+
+def test_release_closes_the_socket_before_releasing_the_board(
+    monkeypatch, tmp_path
+):
+    app = _make_app(monkeypatch, tmp_path, api_url="https://api.example")
+    order = []
+
+    class _FakeConnection:
+        def close(self):
+            order.append("close")
+
+    app._connection = _FakeConnection()
+    monkeypatch.setattr(
+        _app_mod._client, "release_session",
+        lambda *args: order.append("release") or "job-1",
+    )
+    assert app.release() == "job-1"
+    assert order == ["close", "release"]
+    assert app._connection is None
+
+
+def test_release_without_a_socket_is_fine(monkeypatch, tmp_path, no_release):
+    app = _make_app(monkeypatch, tmp_path, api_url="https://api.example")
+    app.release()
+    app.release()
+    assert len(no_release) == 2
+
+
+def test_leaving_with_app_closes_the_socket(
+    server, monkeypatch, tmp_path, no_release
+):
+    app = _make_app(monkeypatch, tmp_path, api_url=server.http_url)
+    with app:
+        app.write(0x0, 1)
+    assert app._connection is None
+    assert _wait_until(lambda: server.ended == 1)
+
+
+def test_app_reused_after_release_talks_to_the_new_board(
+    server, monkeypatch, tmp_path, no_release
+):
+    app = _make_app(monkeypatch, tmp_path, api_url=server.http_url)
+    with app:
+        app.write(0x0, 1)
+    # A second `with app:` reprograms first and may land on another board.
+    app._programmed, app.fpga_id = True, 8
+    with app:
+        app.write(0x0, 2)
+    assert server.paths == ["/fpga/7/stream", "/fpga/8/stream"]
+
+
+def test_stream_is_gone_from_the_public_api():
+    assert not hasattr(mrg.App, "stream")
+    assert not hasattr(mrg.cloud, "Stream")
+    assert "Stream" not in mrg.cloud.__all__

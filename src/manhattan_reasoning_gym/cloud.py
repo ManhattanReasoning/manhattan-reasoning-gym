@@ -11,12 +11,11 @@ from __future__ import annotations
 import os
 
 from ._app import App, RegisterMap
-from ._client import Stream, get_session, release_session
+from ._client import get_session, release_session
 
 __all__ = [
     "App",
     "RegisterMap",
-    "Stream",
     "get_session",
     "release_session",
     "secret",

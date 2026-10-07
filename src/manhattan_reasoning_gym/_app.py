@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from . import _client, _credentials, _progress
+from . import _client, _credentials, _progress, _transport
 
 # All App instances created at module import time are registered here so the
 # CLI can discover them without the user needing to export anything explicitly.
@@ -36,6 +36,12 @@ class App:
     have a live session on without rebuilding (``mrg run --no-program
     --fpga-id N`` / ``App(..., fpga_id=N)`` with programming skipped).
 
+    ``read()``/``write()`` go over one WebSocket, opened on the first call and
+    closed after a short idle period (the next call reopens it). Pass
+    ``transport="http"`` -- or set ``$MRG_TRANSPORT=http`` -- to make each call
+    its own HTTP job instead: much slower, but it works on networks that block
+    WebSockets.
+
     Typical usage::
 
         app = manhattan_reasoning_gym.App(
@@ -66,6 +72,7 @@ class App:
         sys_clk_freq: int | None = None,
         timing_target_mhz: float | None = None,
         poll_timeout: float | None = None,
+        transport: str | None = None,
     ) -> None:
         self.name = name
         self.design = design
@@ -74,6 +81,11 @@ class App:
         # own build ceiling. Raise it only if your designs build slower than
         # that; lowering it risks abandoning builds that would have succeeded.
         self.poll_timeout = poll_timeout
+        # How read()/write() reach the board: "websocket" (default) keeps one
+        # socket open across calls; "http" makes each call its own queued job
+        # -- much slower, for networks that block WebSockets. Falls back to
+        # $MRG_TRANSPORT; `mrg run --transport` overrides it.
+        self.transport = _transport.resolve_transport(transport)
         # Verilog-only top-module disambiguator (ignored for an Amaranth
         # design); only needed when the file has more than one module
         # exposing the Wishbone contract -- otherwise auto-detected.
@@ -103,6 +115,7 @@ class App:
         )
         self._entrypoint: Callable | None = None
         self._programmed = False
+        self._connection: _transport.Transport | None = None
         _registry.append(self)
 
     def local_entrypoint(self) -> Callable:
@@ -124,7 +137,7 @@ class App:
         Programs the FPGA first if not already done.
         """
         self._ensure_programmed()
-        data = _client.read(self.fpga_id, self.api_key, addr, count, self.api_url)
+        data = self._open_connection().read(addr, count)
         return data[0] if count == 1 else data
 
     def write(
@@ -141,22 +154,7 @@ class App:
         """
         self._ensure_programmed()
         words = [value] if isinstance(value, int) else value
-        _client.write(
-            self.fpga_id, self.api_key, addr, words, self.api_url,
-            fixed_address=fixed_address,
-        )
-
-    def stream(self) -> _client.Stream:
-        """Open a persistent, low-latency session for many small ops.
-
-        Unlike ``write()``/``read()``, ops on the returned ``Stream`` skip the
-        per-call job queue and poll loop -- use this for tight loops like
-        streaming a CNF instance in one literal per write, or an RL reward
-        loop that needs many ops per episode. Programs the FPGA first if not
-        already done.
-        """
-        self._ensure_programmed()
-        return _client.Stream(self.fpga_id, self.api_key, self.api_url)
+        self._open_connection().write(addr, words, fixed_address=fixed_address)
 
     def _program(self) -> None:
         """Submit the design and block until it's built and flashed.
@@ -187,7 +185,12 @@ class App:
         self._programmed = True
 
     def release(self) -> str:
-        """Release the active session, returning the reset job_id."""
+        """Release the active session, returning the reset job_id.
+
+        Closes this App's WebSocket first: an open socket holds the board's
+        link lock, which the reset job needs.
+        """
+        self._close_connection()
         job_id = _client.release_session(self.fpga_id, self.api_key, self.api_url)
         self._programmed = False
         return job_id
@@ -201,3 +204,17 @@ class App:
     def _ensure_programmed(self) -> None:
         if not self._programmed:
             self._program()
+
+    def _open_connection(self) -> _transport.Transport:
+        # Made on first use, not in __init__: fpga_id is only known once the
+        # board has been programmed.
+        if self._connection is None:
+            self._connection = _transport.open_transport(
+                self.transport, self.fpga_id, self.api_key, self.api_url
+            )
+        return self._connection
+
+    def _close_connection(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None

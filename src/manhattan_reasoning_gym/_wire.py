@@ -1,10 +1,10 @@
-"""Minimal Wishbone wire codec for the streaming client.
+"""Minimal Wishbone wire codec for the WebSocket transport.
 
 Mirrors orchestrator/src/cloud_fpga_orchestrator/workers/protocol.py (the
 Manhattan-Reasoning-Cloud repo) so this package doesn't need to depend on the
-private orchestrator package for the one thing App.stream() needs: encoding
-requests and decoding responses for the raw byte-passthrough WebSocket relay
-at /fpga/{id}/stream.
+private orchestrator package for the one thing _transport.WebSocketTransport
+needs: encoding requests and decoding responses for the raw byte-passthrough
+WebSocket relay at /fpga/{id}/stream.
 """
 
 from __future__ import annotations
