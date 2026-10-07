@@ -175,6 +175,13 @@ class WebSocketTransport:
             except websockets.exceptions.ConnectionClosed as exc:
                 self._close_locked()
                 raise _closed_error(exc, self._fpga_id, what) from exc
+            except BaseException:
+                # Interrupted mid-exchange (e.g. Ctrl-C while waiting for the
+                # reply): the server may still answer, and the relay pairs
+                # replies with requests purely by order, so this socket would
+                # hand the next call a stale reply. Drop it.
+                self._close_locked()
+                raise
             self._last_used = time.monotonic()
         if isinstance(raw, str):
             raise RuntimeError("received an unexpected text frame")

@@ -8,6 +8,8 @@ from __future__ import annotations
 import struct
 import threading
 import time
+import tomllib
+from pathlib import Path
 
 import pytest
 import websockets.sync.server
@@ -613,3 +615,32 @@ def test_stream_is_gone_from_the_public_api():
     assert not hasattr(mrg.App, "stream")
     assert not hasattr(mrg.cloud, "Stream")
     assert "Stream" not in mrg.cloud.__all__
+
+
+def test_interrupted_call_drops_the_socket_so_replies_stay_paired(
+    server, transports
+):
+    t = transports(server)
+    t.read(0x1000)  # opens the socket
+    conn = t._conn
+    real_recv = conn.recv
+
+    def interrupted_recv(*args, **kwargs):
+        conn.recv = real_recv
+        raise KeyboardInterrupt  # e.g. Ctrl-C while waiting for the reply
+
+    conn.recv = interrupted_recv
+    with pytest.raises(KeyboardInterrupt):
+        t.read(0x2000)
+    # The interrupted read's reply can still arrive on that socket; the relay
+    # pairs replies with requests by order, so the next call needs a new one.
+    assert t.read(0x3000) == [0x3000]
+    assert len(server.paths) == 2
+
+
+def test_websockets_floor_has_sync_keepalive():
+    # The sync client only sends keep-alive pings from websockets 15.0; below
+    # that, a silently dead network can hang a call's recv() forever.
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    deps = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
+    assert "websockets>=15.0" in deps
