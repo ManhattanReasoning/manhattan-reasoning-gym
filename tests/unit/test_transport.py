@@ -5,9 +5,15 @@ these exercise the actual wire round trip the SDK depends on."""
 
 from __future__ import annotations
 
+import struct
+import threading
+import time
+
 import pytest
+import websockets.sync.server
 
 from manhattan_reasoning_gym import _transport
+from manhattan_reasoning_gym._client import _ws_url
 
 # -- resolve_transport ---------------------------------------------------------
 
@@ -84,3 +90,230 @@ def test_http_transport_close_is_a_no_op():
     t = _transport.HttpTransport(3, "k", "https://api.example")
     t.close()
     t.close()
+
+
+# -- a local WebSocket server standing in for the orchestrator's /stream ------
+
+
+def _response_bytes(status: int, data: list[int]) -> bytes:
+    header = struct.pack(">B", status) + struct.pack(">I", len(data))[1:]
+    words = struct.pack(f">{len(data)}I", *data) if data else b""
+    return header + words
+
+
+def _default_reply(message: bytes) -> bytes:
+    """OK for a write; for a read, echo back the addresses that were read."""
+    if message[0] & 0x7F == 0x02:  # READ
+        address = struct.unpack(">I", message[4:8])[0]
+        count = struct.unpack(">I", message[8:12])[0]
+        return _response_bytes(0x00, [address + 4 * i for i in range(count)])
+    return _response_bytes(0x00, [])
+
+
+class _Server:
+    """A real local WebSocket server. Knobs, set before the client acts:
+
+    - replies: canned reply frames, used first-in first-out; when empty,
+      _default_reply answers.
+    - reject_status: refuse the handshake with this HTTP status.
+    - close_with: on the next request, close with (code, reason) instead of
+      replying.
+    - close_after_reply: close normally right after replying.
+    - delay: seconds to wait before replying.
+    """
+
+    def __init__(self):
+        self.requests: list[bytes] = []
+        self.paths: list[str] = []
+        self.headers: list = []
+        self.replies: list = []
+        self.reject_status: int | None = None
+        self.close_with: tuple[int, str] | None = None
+        self.close_after_reply = False
+        self.delay = 0.0
+        self.ended = 0  # connections whose handler has finished
+        self._ended_lock = threading.Lock()
+        self._server = websockets.sync.server.serve(
+            self._handle, "127.0.0.1", 0, process_request=self._process_request
+        )
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True
+        )
+        self._thread.start()
+
+    def _process_request(self, connection, request):
+        if self.reject_status is not None:
+            return connection.respond(self.reject_status, "rejected\n")
+        return None
+
+    def _handle(self, ws) -> None:
+        self.paths.append(ws.request.path)
+        # Headers is case-insensitive; keep the object itself rather than a
+        # plain dict so lookups like headers["X-API-Key"] still work.
+        self.headers.append(ws.request.headers)
+        try:
+            for message in ws:
+                self.requests.append(message)
+                if self.close_with is not None:
+                    ws.close(*self.close_with)
+                    return
+                if self.delay:
+                    time.sleep(self.delay)
+                reply = self.replies.pop(0) if self.replies else None
+                ws.send(reply if reply is not None else _default_reply(message))
+                if self.close_after_reply:
+                    ws.close()
+                    return
+        finally:
+            with self._ended_lock:
+                self.ended += 1
+
+    @property
+    def port(self) -> int:
+        return self._server.socket.getsockname()[1]
+
+    @property
+    def http_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._thread.join(timeout=2)
+
+
+@pytest.fixture
+def server():
+    srv = _Server()
+    yield srv
+    srv.close()
+
+
+@pytest.fixture
+def transports():
+    """Make WebSocketTransports that are always closed after the test."""
+    made = []
+
+    def make(server: _Server, fpga_id: int = 0) -> _transport.WebSocketTransport:
+        t = _transport.WebSocketTransport(fpga_id, "k", server.http_url)
+        made.append(t)
+        return t
+
+    yield make
+    for t in made:
+        t.close()
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+# -- WebSocketTransport: frames and connection reuse ----------------------------
+
+
+def test_ws_url_conversion():
+    assert _ws_url("https://api.manhattanreasoning.com", 3) == (
+        "wss://api.manhattanreasoning.com/fpga/3/stream"
+    )
+    assert _ws_url("http://127.0.0.1:9000", 0) == "ws://127.0.0.1:9000/fpga/0/stream"
+
+
+def test_open_transport_picks_the_class(monkeypatch):
+    monkeypatch.delenv("MRG_TRANSPORT", raising=False)
+    ws = _transport.open_transport(None, 3, "k", "https://api.example")
+    http = _transport.open_transport("http", 3, "k", "https://api.example")
+    assert isinstance(ws, _transport.WebSocketTransport)
+    assert isinstance(http, _transport.HttpTransport)
+
+
+def test_open_transport_validates_kind():
+    with pytest.raises(ValueError):
+        _transport.open_transport("ftp", 3, "k", "https://api.example")
+
+
+def test_nothing_connects_before_the_first_call(server, transports):
+    t = transports(server)
+    time.sleep(0.05)
+    assert server.paths == []
+    assert t._conn is None
+
+
+def test_write_sends_correct_frame_to_the_right_fpga(server, transports):
+    transports(server, fpga_id=5).write(0x10, [0xDEADBEEF])
+    assert server.paths == ["/fpga/5/stream"]
+    assert server.headers[0]["X-API-Key"] == "k"
+    # opcode=WRITE(1), length=1, address=0x10, data=[0xDEADBEEF]
+    assert server.requests == [
+        bytes([0x01, 0x00, 0x00, 0x01])
+        + struct.pack(">I", 0x10)
+        + struct.pack(">I", 0xDEADBEEF)
+    ]
+
+
+def test_write_fixed_address_sets_flag(server, transports):
+    transports(server).write(0x20, [1, 2, 3], fixed_address=True)
+    (raw,) = server.requests
+    assert raw[0] == 0x01 | 0x80  # WRITE | FLAG_FIXED_ADDR
+
+
+def test_burst_write_is_one_message(server, transports):
+    transports(server).write(0x0, [1, 2, 3])
+    assert len(server.requests) == 1
+
+
+def test_read_returns_a_list_of_words(server, transports):
+    server.replies = [_response_bytes(0x00, [0x2A])]
+    t = transports(server)
+    assert t.read(0x8) == [0x2A]
+    assert t.read(0x8, count=3) == [0x8, 0xC, 0x10]  # default reply echoes
+
+
+def test_write_error_status_raises(server, transports):
+    server.replies = [_response_bytes(0x01, [])]
+    with pytest.raises(RuntimeError, match="write to 0x0 failed"):
+        transports(server).write(0x0, [1])
+
+
+def test_read_error_status_raises(server, transports):
+    server.replies = [_response_bytes(0x01, [])]
+    with pytest.raises(RuntimeError, match="read of 1 words at 0x8 failed"):
+        transports(server).read(0x8)
+
+
+def test_many_calls_share_one_connection(server, transports):
+    t = transports(server)
+    for i in range(5):
+        t.write(0x0, [i])
+    # Exactly one handshake for five ops -- the whole point of the socket.
+    assert len(server.paths) == 1
+    assert len(server.requests) == 5
+
+
+def test_close_closes_the_socket_and_is_idempotent(server, transports):
+    t = transports(server)
+    t.write(0x0, [1])
+    t.close()
+    t.close()
+    assert t._conn is None
+    assert _wait_until(lambda: server.ended == 1)
+
+
+def test_call_after_close_opens_a_new_socket(server, transports):
+    t = transports(server)
+    t.write(0x0, [1])
+    t.close()
+    t.write(0x0, [2])
+    assert len(server.paths) == 2
+
+
+@pytest.mark.filterwarnings("error::DeprecationWarning")
+def test_long_lived_socket_raises_no_deprecation_warning(server, transports):
+    # websockets >= 16 warns when a connection is used outside
+    # `with connect(...)`; ours outlives any one block, so it must opt in.
+    t = transports(server)
+    t.write(0x0, [1])
+    assert t.read(0x0) == [0x0]
