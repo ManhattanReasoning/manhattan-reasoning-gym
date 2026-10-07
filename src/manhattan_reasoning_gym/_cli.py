@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import _client, _credentials
+from . import _client, _credentials, _transport
 
 # ── terminal colour helpers ──────────────────────────────────────────────────
 
@@ -204,6 +204,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         app.timing_target_mhz = args.timing_target_mhz
     if args.top is not None:
         app.top = args.top
+    if args.transport is not None:
+        app.transport = args.transport
     if args.api_url:
         app.api_url = args.api_url
     if args.api_key:
@@ -335,15 +337,33 @@ def cmd_reset(args: argparse.Namespace) -> None:
 
 def cmd_read(args: argparse.Namespace) -> None:
     api_key, api_url = _creds(args)
-    data = _client.read(args.fpga_id, api_key, args.address, args.count, api_url)
+    data = _one_call(
+        args, api_key, api_url, lambda t: t.read(args.address, args.count)
+    )
     for i, word in enumerate(data):
         print(f"  {hex(args.address + i * 4)}: {word:#010x}")
 
 
 def cmd_write(args: argparse.Namespace) -> None:
     api_key, api_url = _creds(args)
-    _client.write(args.fpga_id, api_key, args.address, [args.value], api_url)
+    _one_call(args, api_key, api_url, lambda t: t.write(args.address, [args.value]))
     print(f"  {hex(args.address)} ← {args.value:#010x}")
+
+
+def _one_call(args: argparse.Namespace, api_key: str, api_url: str, call):
+    """Open a transport to args.fpga_id, make one call, always close it."""
+    try:
+        transport = _transport.open_transport(
+            args.transport, args.fpga_id, api_key, api_url
+        )
+    except ValueError as exc:  # a bad $MRG_TRANSPORT
+        sys.exit(f"error: {exc}")
+    try:
+        return call(transport)
+    except ConnectionError as exc:
+        sys.exit(f"error: {exc}")
+    finally:
+        transport.close()
 
 
 def _local_report(mode: str, args: argparse.Namespace) -> None:
@@ -383,6 +403,13 @@ def main() -> None:
                         help="API key (default: $MRG_API_KEY)")
     common.add_argument("--api-url", default=None, metavar="URL",
                         help=f"orchestrator URL (default: {_client.DEFAULT_API_URL})")
+    transport_opt = argparse.ArgumentParser(add_help=False)
+    transport_opt.add_argument(
+        "--transport", choices=_transport.TRANSPORTS, default=None,
+        help="how read/write reach the board: websocket, or http (slower; for "
+             "networks that block WebSockets). Default: $MRG_TRANSPORT, else "
+             "websocket",
+    )
 
     parser = argparse.ArgumentParser(
         prog="mrg",
@@ -412,7 +439,7 @@ def main() -> None:
     )
 
     # run
-    run_p = sub.add_parser("run", parents=[common],
+    run_p = sub.add_parser("run", parents=[common, transport_opt],
                            help="program the FPGA and run @app.local_entrypoint()")
     run_p.add_argument("file", help="Python file defining an App")
     run_p.add_argument("--fpga-id", type=int, default=None, dest="fpga_id",
@@ -510,7 +537,7 @@ def main() -> None:
     res_p.add_argument("fpga_id", type=int)
 
     # read <fpga_id> <addr>
-    read_p = sub.add_parser("read", parents=[common],
+    read_p = sub.add_parser("read", parents=[common, transport_opt],
                             help="read 32-bit word(s) from a live FPGA")
     read_p.add_argument("fpga_id", type=int)
     read_p.add_argument("address", type=lambda s: int(s, 0),
@@ -518,7 +545,7 @@ def main() -> None:
     read_p.add_argument("--count", type=int, default=1)
 
     # write <fpga_id> <addr> <value>
-    wr_p = sub.add_parser("write", parents=[common],
+    wr_p = sub.add_parser("write", parents=[common, transport_opt],
                           help="write a 32-bit word to a live FPGA")
     wr_p.add_argument("fpga_id", type=int)
     wr_p.add_argument("address", type=lambda s: int(s, 0),
