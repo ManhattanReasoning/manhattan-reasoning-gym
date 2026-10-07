@@ -109,6 +109,13 @@ with app:                    # programs the FPGA on first use, releases on exit
     print("read:", app.read(0x8))
 ```
 
+`read`/`write` calls go over one WebSocket that the SDK opens on the first
+call, reuses for every call after it, and closes after 25 s without a call
+(the next call reopens it). On a network that blocks WebSockets, use HTTP
+instead: `App(..., transport="http")`, `MRG_TRANSPORT=http`, or
+`--transport http` on `mrg run` / `mrg read` / `mrg write`. HTTP works
+anywhere but is much slower: each call is a queued job (about 0.5 s or more).
+
 Or drive it from the CLI with a file that defines an `App` and an
 `@app.local_entrypoint()` — see [`examples/app.py`](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/examples/app.py), which
 exercises the example MAC design end-to-end:
