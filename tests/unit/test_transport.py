@@ -413,3 +413,72 @@ def test_text_frame_reply_raises(server, transports):
     server.replies = ["not a frame"]
     with pytest.raises(RuntimeError, match="unexpected text frame"):
         transports(server).read(0x0)
+
+
+# -- WebSocketTransport: idle close and threads ---------------------------------
+
+
+@pytest.fixture
+def short_idle(monkeypatch):
+    monkeypatch.setattr(_transport, "_WS_IDLE_TIMEOUT", 0.2)
+
+
+def test_idle_socket_closes_itself_and_reopens_on_next_call(
+    server, transports, short_idle
+):
+    t = transports(server)
+    t.write(0x0, [1])
+    assert _wait_until(lambda: server.ended == 1)  # closed by the idle timer
+    assert t._conn is None
+    t.write(0x0, [2])
+    assert len(server.paths) == 2
+
+
+def test_calls_keep_pushing_the_idle_deadline_out(server, transports, short_idle):
+    t = transports(server)
+    for i in range(10):  # 0.5 s of activity, never 0.2 s idle
+        t.write(0x0, [i])
+        time.sleep(0.05)
+    assert len(server.paths) == 1
+    assert server.ended == 0
+
+
+def test_idle_timer_never_closes_during_a_slow_call(server, transports, short_idle):
+    server.delay = 0.5  # the reply takes longer than the idle timeout
+    t = transports(server)
+    assert t.read(0x8) == [0x8]
+    assert server.ended == 0
+
+
+def test_close_stops_the_idle_watcher(server, transports):
+    t = transports(server)
+    t.write(0x0, [1])
+    watcher = t._watcher
+    assert watcher.is_alive()
+    t.close()
+    assert not watcher.is_alive()
+
+
+def test_idle_watcher_does_not_keep_the_process_alive(server, transports):
+    t = transports(server)
+    t.write(0x0, [1])
+    assert t._watcher.daemon
+
+
+def test_threads_sharing_a_transport_get_their_own_replies(server, transports):
+    t = transports(server)
+    results: dict[int, list[int]] = {0: [], 1: []}
+
+    def worker(n: int) -> None:
+        base = 0x1000 * (n + 1)
+        for i in range(50):
+            results[n].append(t.read(base + 4 * i)[0])
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in (0, 1)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=10)
+    assert results[0] == [0x1000 + 4 * i for i in range(50)]
+    assert results[1] == [0x2000 + 4 * i for i in range(50)]
+    assert len(server.paths) == 1

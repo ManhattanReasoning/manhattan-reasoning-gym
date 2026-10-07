@@ -29,6 +29,17 @@ WEBSOCKET = "websocket"
 HTTP = "http"
 TRANSPORTS = (WEBSOCKET, HTTP)
 
+# Close an idle socket after this many seconds without a call. An open stream
+# holds the board's link lock on the orchestrator (state/store.py
+# fpga_link_lock, timeout=30), and the server renews that lock only when an
+# operation goes through -- keep-alive pings don't renew it. A socket left idle
+# past 30 s outlives its lock: the next op is forwarded to the FPGA unlocked,
+# then the server drops the socket. Closing it ourselves first avoids that; the
+# 5 s gap covers reply latency and the close reaching the server.
+#
+# NOTE: if fpga_link_lock's timeout changes on the server, keep this below it.
+_WS_IDLE_TIMEOUT = 25.0
+
 # How long to wait for the WebSocket handshake. A network that blocks
 # WebSockets often stalls the upgrade rather than refusing it outright.
 _WS_OPEN_TIMEOUT = 10.0
@@ -96,20 +107,25 @@ class HttpTransport:
 
 
 class WebSocketTransport:
-    """One WebSocket to the FPGA, opened on first use and reused after.
+    """One WebSocket to the FPGA: opened on first use, closed when idle.
 
-    Every call holds ``self._lock`` for its whole send/receive, so two threads
-    sharing one App can't interleave frames on the wire -- the relay matches
-    replies to requests purely by order.
+    Every call holds ``self._lock`` for its whole send/receive, so the idle
+    watcher can never close the socket mid-call and two threads sharing one
+    App can't interleave frames on the wire -- the relay matches replies to
+    requests purely by order.
     """
 
     def __init__(self, fpga_id: int, api_key: str, api_url: str) -> None:
         self._fpga_id = fpga_id
         self._api_key = api_key
         self._api_url = api_url
+        self._idle_timeout = _WS_IDLE_TIMEOUT
         self._lock = threading.Lock()
         self._conn: websockets.sync.client.ClientConnection | None = None
         self._last_used = 0.0
+        # One watcher thread per open socket; _stop wakes it early on close.
+        self._stop: threading.Event | None = None
+        self._watcher: threading.Thread | None = None
 
     def read(self, addr: int, count: int = 1) -> list[int]:
         """Read ``count`` 32-bit words starting at byte address ``addr``."""
@@ -138,9 +154,13 @@ class WebSocketTransport:
             raise RuntimeError(f"{what} failed")
 
     def close(self) -> None:
-        """Close the socket if it's open. Safe to call more than once."""
+        """Close the socket and stop its idle watcher. Safe to call twice."""
         with self._lock:
+            watcher = self._watcher
             self._close_locked()
+        # Join outside the lock: the watcher may be waiting to take it.
+        if watcher is not None:
+            watcher.join(timeout=1)
 
     # -- internals; every *_locked method expects self._lock to be held -------
 
@@ -182,12 +202,45 @@ class WebSocketTransport:
         if self._conn is None:
             self._conn = _connect(self._fpga_id, self._api_key, self._api_url)
             self._last_used = time.monotonic()
+            self._stop = threading.Event()
+            # Daemon: a script that ends with the socket still open must not
+            # hang waiting for the idle timeout.
+            self._watcher = threading.Thread(
+                target=self._watch_idle,
+                args=(self._conn, self._stop),
+                name=f"mrg-ws-idle-fpga{self._fpga_id}",
+                daemon=True,
+            )
+            self._watcher.start()
         return self._conn
 
     def _close_locked(self) -> None:
+        if self._stop is not None:
+            self._stop.set()
+        self._stop = None
+        self._watcher = None
         conn, self._conn = self._conn, None
         if conn is not None:
             conn.close()
+
+    def _watch_idle(
+        self, conn: websockets.sync.client.ClientConnection, stop: threading.Event
+    ) -> None:
+        """Close *conn* once no call has used it for ``_idle_timeout`` s.
+
+        Sleeps until the exact deadline rather than polling, so the close
+        lands on time; a call made meanwhile pushes the deadline out.
+        """
+        while True:
+            with self._lock:
+                if self._conn is not conn:
+                    return  # already closed or replaced
+                remaining = self._last_used + self._idle_timeout - time.monotonic()
+                if remaining <= 0:
+                    self._close_locked()
+                    return
+            if stop.wait(remaining):
+                return
 
 
 def _connect(
