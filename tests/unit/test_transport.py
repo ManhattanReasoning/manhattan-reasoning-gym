@@ -317,3 +317,99 @@ def test_long_lived_socket_raises_no_deprecation_warning(server, transports):
     t = transports(server)
     t.write(0x0, [1])
     assert t.read(0x0) == [0x0]
+
+
+# -- WebSocketTransport: errors -------------------------------------------------
+
+
+def test_rejected_handshake_names_the_status_and_the_fixes(server, transports):
+    server.reject_status = 403
+    with pytest.raises(ConnectionError) as info:
+        transports(server, fpga_id=3).write(0x0, [1])
+    msg = str(info.value)
+    assert "Couldn't open a WebSocket to FPGA 3 (HTTP 403)" in msg
+    assert "mrg status 3" in msg
+    assert 'transport="http"' in msg
+    assert "MRG_TRANSPORT=http" in msg
+    assert server.requests == []
+
+
+@pytest.mark.parametrize(
+    "error", [OSError("connection refused"), TimeoutError("timed out in handshake")]
+)
+def test_network_failure_on_open_names_the_fix(monkeypatch, error):
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(_transport.websockets.sync.client, "connect", fail)
+    t = _transport.WebSocketTransport(3, "k", "https://api.example")
+    with pytest.raises(ConnectionError) as info:
+        t.read(0x0)
+    msg = str(info.value)
+    assert "Couldn't open a WebSocket to FPGA 3" in msg
+    assert str(error) in msg
+    assert "MRG_TRANSPORT=http" in msg
+    assert info.value.__cause__ is error
+
+
+def test_busy_board_is_reported_as_in_use(server, transports):
+    server.close_with = (4409, "FPGA is busy with a run job")
+    with pytest.raises(ConnectionError) as info:
+        transports(server, fpga_id=3).write(0x0, [1])
+    msg = str(info.value)
+    assert "FPGA 3 is in use by another connection" in msg
+    assert "FPGA is busy with a run job" in msg
+
+
+@pytest.mark.parametrize(
+    "code, reason", [(4502, "FPGA connection failed: timed out"), (1011, "oops")]
+)
+def test_drop_during_a_call_says_it_may_have_run(server, transports, code, reason):
+    server.close_with = (code, reason)
+    t = transports(server, fpga_id=3)
+    with pytest.raises(ConnectionError) as info:
+        t.write(0x10, [1])
+    msg = str(info.value)
+    assert "Connection to FPGA 3 lost during write to 0x10" in msg
+    assert f"server closed with {code}: {reason}" in msg
+    assert "may or may not have run" in msg
+    assert t._conn is None
+
+
+def test_drop_without_a_close_frame_says_it_may_have_run():
+    exc = _transport.websockets.exceptions.ConnectionClosed(None, None)
+    err = _transport._closed_error(exc, 3, "read of 1 words at 0x8")
+    assert str(err) == (
+        "Connection to FPGA 3 lost during read of 1 words at 0x8. "
+        "The operation may or may not have run on the FPGA."
+    )
+
+
+def test_next_call_after_a_drop_opens_a_fresh_socket(server, transports):
+    server.close_with = (4502, "FPGA connection failed")
+    t = transports(server)
+    with pytest.raises(ConnectionError):
+        t.write(0x0, [1])
+    server.close_with = None
+    t.write(0x0, [2])
+    assert len(server.paths) == 2
+
+
+def test_socket_closed_while_idle_is_replaced_silently(server, transports):
+    server.close_after_reply = True
+    t = transports(server)
+    t.write(0x0, [1])
+    # The server hung up after replying; wait for that close to finish so the
+    # client's socket is no longer open when the next call goes out.
+    assert _wait_until(lambda: server.ended == 1)
+    server.close_after_reply = False
+    t.write(0x0, [2])
+    assert len(server.paths) == 2
+    # Each call reached the server exactly once.
+    assert [struct.unpack(">I", r[8:12])[0] for r in server.requests] == [1, 2]
+
+
+def test_text_frame_reply_raises(server, transports):
+    server.replies = ["not a frame"]
+    with pytest.raises(RuntimeError, match="unexpected text frame"):
+        transports(server).read(0x0)

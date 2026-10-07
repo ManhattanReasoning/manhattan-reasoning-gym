@@ -20,6 +20,7 @@ import os
 import threading
 import time
 
+import websockets.exceptions
 import websockets.sync.client
 
 from . import _client, _wire
@@ -31,6 +32,17 @@ TRANSPORTS = (WEBSOCKET, HTTP)
 # How long to wait for the WebSocket handshake. A network that blocks
 # WebSockets often stalls the upgrade rather than refusing it outright.
 _WS_OPEN_TIMEOUT = 10.0
+
+# Close code the orchestrator's /stream uses after accepting a socket it then
+# can't serve because another connection holds the board's link lock. (Its
+# refusals before accepting -- board not reserved, not your session -- reach
+# the client as an HTTP status on the handshake instead.)
+_CLOSE_BUSY = 4409
+
+_HTTP_HINT = (
+    "If your network blocks WebSockets, use HTTP instead: "
+    'App(..., transport="http") or MRG_TRANSPORT=http.'
+)
 
 
 def resolve_transport(value: str | None = None) -> str:
@@ -137,13 +149,34 @@ class WebSocketTransport:
     ) -> _wire.WishboneResponse:
         payload = request.to_bytes()
         with self._lock:
-            conn = self._open_locked()
-            conn.send(payload)
-            raw = conn.recv()
+            try:
+                conn = self._send_locked(payload)
+                raw = conn.recv()
+            except websockets.exceptions.ConnectionClosed as exc:
+                self._close_locked()
+                raise _closed_error(exc, self._fpga_id, what) from exc
             self._last_used = time.monotonic()
         if isinstance(raw, str):
             raise RuntimeError("received an unexpected text frame")
         return _wire.WishboneResponse.from_bytes(raw)
+
+    def _send_locked(self, payload: bytes) -> websockets.sync.client.ClientConnection:
+        """Send *payload*, replacing a socket that closed while idle.
+
+        Returns the connection the payload went out on.
+        """
+        conn = self._open_locked()
+        try:
+            conn.send(payload)
+        except websockets.exceptions.ConnectionClosed:
+            # The socket closed while idle (server restart, network drop).
+            # websockets refuses to send on a socket that isn't open, so
+            # nothing reached the server and a fresh socket can safely carry
+            # this call. Only once: a second failure is a real one.
+            self._close_locked()
+            conn = self._open_locked()
+            conn.send(payload)
+        return conn
 
     def _open_locked(self) -> websockets.sync.client.ClientConnection:
         if self._conn is None:
@@ -160,15 +193,48 @@ class WebSocketTransport:
 def _connect(
     fpga_id: int, api_key: str, api_url: str
 ) -> websockets.sync.client.ClientConnection:
-    conn = websockets.sync.client.connect(
-        _client._ws_url(api_url, fpga_id),
-        additional_headers={"X-API-Key": api_key},
-        open_timeout=_WS_OPEN_TIMEOUT,
-    )
+    try:
+        conn = websockets.sync.client.connect(
+            _client._ws_url(api_url, fpga_id),
+            additional_headers={"X-API-Key": api_key},
+            open_timeout=_WS_OPEN_TIMEOUT,
+        )
+    except websockets.exceptions.InvalidStatus as exc:
+        status = exc.response.status_code
+        raise ConnectionError(
+            f"Couldn't open a WebSocket to FPGA {fpga_id} (HTTP {status}). "
+            f"Check the board is reserved by you: mrg status {fpga_id}. "
+            f"{_HTTP_HINT}"
+        ) from exc
+    except (OSError, websockets.exceptions.InvalidHandshake) as exc:
+        # OSError covers DNS failures, refused connections, and the
+        # TimeoutError a stalled upgrade raises after _WS_OPEN_TIMEOUT.
+        raise ConnectionError(
+            f"Couldn't open a WebSocket to FPGA {fpga_id} ({exc}). {_HTTP_HINT}"
+        ) from exc
     # websockets >= 16 warns when a connection is used outside
     # `with connect(...)`. This one deliberately outlives any single block --
     # _close_locked closes it -- so enter its context explicitly.
     return conn.__enter__()
+
+
+def _closed_error(
+    exc: websockets.exceptions.ConnectionClosed, fpga_id: int, what: str
+) -> ConnectionError:
+    """Explain a socket that closed while a call was waiting for its reply."""
+    rcvd = exc.rcvd
+    if rcvd is not None and rcvd.code == _CLOSE_BUSY:
+        # The server never forwarded this call: it closes before reading.
+        return ConnectionError(
+            f"FPGA {fpga_id} is in use by another connection "
+            f"(server: {rcvd.reason}). Close other scripts or terminals "
+            "using this board, then try again."
+        )
+    detail = f" (server closed with {rcvd.code}: {rcvd.reason})" if rcvd else ""
+    return ConnectionError(
+        f"Connection to FPGA {fpga_id} lost during {what}{detail}. "
+        "The operation may or may not have run on the FPGA."
+    )
 
 
 # What open_transport returns; App and the CLI only use read/write/close.
