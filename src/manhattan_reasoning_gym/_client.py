@@ -309,3 +309,14 @@ def _ws_url(api_url: str, fpga_id: int) -> str:
     else:
         base = api_url
     return f"{base}/fpga/{fpga_id}/stream"
+
+
+def get_health(api_url: str) -> dict:
+    """Read public server health with a bounded wait for status display."""
+    response = requests.get(f"{api_url.rstrip('/')}/health", timeout=3)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError("Invalid health response")
+    return data
+
