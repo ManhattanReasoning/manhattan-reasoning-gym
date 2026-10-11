@@ -8,7 +8,10 @@ import importlib.util
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+
+import requests
 
 from . import _client, _credentials, _transport
 
@@ -228,8 +231,54 @@ def cmd_run(args: argparse.Namespace) -> None:
     app._entrypoint()
 
 
+def _elapsed_since(value, now: datetime, end=None) -> str:
+    """Format a timestamp duration; legacy or invalid values stay unknown."""
+    try:
+        start = datetime.fromisoformat(value)
+        stop = datetime.fromisoformat(end) if end is not None else now
+        if start.tzinfo is None or stop.tzinfo is None:
+            return "-"
+        seconds = max(0, int((stop - start).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return "-"
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _job_elapsed(job: dict, now: datetime) -> str:
+    terminal = job.get("status") in {"complete", "failed", "cancelled"}
+    if terminal and not job.get("updated_at"):
+        return "-"
+    return _elapsed_since(
+        job.get("created_at"), now,
+        job.get("updated_at") if terminal else None,
+    )
+
+
+def _print_active_builds(api_key: str, api_url: str, now: datetime) -> None:
+    # Builds run without a board until flashing, so a board-only table misses them.
+    try:
+        jobs = _client.list_jobs(api_key, api_url, timeout=3)
+    except (requests.RequestException, ValueError):
+        print("  Your active builds: unavailable")
+        return
+    active = [
+        j for j in jobs if j.get("type") == "build_and_program"
+        and j.get("status") in {"queued", "running"}
+    ]
+    if not active:
+        return
+    print("  Your active builds (elapsed since submission, including waiting):")
+    for job in active:
+        stage = job.get("build_stage") or job["status"]
+        print(f"  {_fmt_id(job['job_id'])}  {_job_elapsed(job, now)}  {stage}")
+    print()
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     api_key, api_url = _creds_optional(args)
+    now = datetime.now(UTC)
 
     if args.fpga_id is not None:
         # Single FPGA detail view
@@ -245,10 +294,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         if sess:
             print(f"  {'session:':<14} {sess.get('session_id', '-')}")
             print(f"  {'expires at:':<14} {sess.get('expires_at', '-')}")
+            held_for = _elapsed_since(sess.get("created_at"), now)
+            print(f"  {'held for:':<14} {held_for}")
         else:
             print(f"  {'session:':<14} {_c('-', _DIM)}")
         cj = d.get("current_job_id")
         print(f"  {'current job:':<14} {_c(cj, _DIM) if cj else _c('-', _DIM)}")
+        if cj:
+            job_age = _elapsed_since(d.get("current_job_created_at"), now)
+            print(f"  {'job age:':<14} {job_age}")
         print()
     else:
         # All-FPGAs table
@@ -256,7 +310,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         if args.json:
             print(json.dumps(fpgas, indent=2))
             return
-        header = f"  {'ID':>2}  {'STATE':<14}  {'OWNER':<12}  CURRENT JOB"
+        header = (
+            f"  {'ID':>2}  {'STATE':<14}  {'OWNER':<12}  "
+            f"{'HELD FOR':<12}  {'JOB AGE':<12}  CURRENT JOB"
+        )
         sep    = "  " + "─" * (len(header) - 2)
         print()
         print(_c(header, _BOLD))
@@ -264,13 +321,18 @@ def cmd_status(args: argparse.Namespace) -> None:
         for d in fpgas:
             owner = d.get("owner") or "-"
             cj    = d.get("current_job_id")
+            held_for = _elapsed_since((d.get("session") or {}).get("created_at"), now)
+            job_age = _elapsed_since(d.get("current_job_created_at"), now)
             print(
                 f"  {d['fpga_id']:>2}  "
                 f"{_fmt_state(d['state']):<14}  "
                 f"{owner:<12}  "
+                f"{held_for:<12}  {job_age:<12}  "
                 f"{_fmt_id(cj)}"
             )
         print()
+        if api_key:
+            _print_active_builds(api_key, api_url, now)
 
 
 def cmd_jobs(args: argparse.Namespace) -> None:
@@ -282,7 +344,11 @@ def cmd_jobs(args: argparse.Namespace) -> None:
     if not jobs:
         print("\n  no jobs\n")
         return
-    header = f"  {'JOB_ID':<10}  {'TYPE':<18}  {'STATUS':<10}  {'FPGA':<5}  CREATED"
+    now = datetime.now(UTC)
+    header = (
+        f"  {'JOB_ID':<10}  {'TYPE':<18}  {'STATUS':<10}  "
+        f"{'FPGA':<5}  {'ELAPSED':<12}  CREATED"
+    )
     sep    = "  " + "─" * (len(header) - 2)
     print()
     print(_c(header, _BOLD))
@@ -293,6 +359,7 @@ def cmd_jobs(args: argparse.Namespace) -> None:
             f"{d['type']:<18}  "
             f"{_fmt_status(d['status']):<10}  "
             f"{_fmt_fpga(d.get('fpga_id')):<5}  "
+            f"{_job_elapsed(d, now):<12}  "
             f"{d['created_at']}"
         )
     print()
@@ -314,6 +381,7 @@ def cmd_job(args: argparse.Namespace) -> None:
     print(f"  {'status:':<14} {_fmt_status(d['status'])}")
     print(f"  {'created at:':<14} {d['created_at']}")
     print(f"  {'updated at:':<14} {d['updated_at']}")
+    print(f"  {'elapsed:':<14} {_job_elapsed(d, datetime.now(UTC))}")
     print()
 
 
