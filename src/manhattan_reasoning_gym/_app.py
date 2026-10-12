@@ -64,6 +64,7 @@ class App:
         name: str,
         *,
         design: str,
+        sources: list[str] | None = None,
         top: str | None = None,
         fpga_id: int | None = None,
         registers: type[RegisterMap] | None = None,
@@ -76,6 +77,7 @@ class App:
     ) -> None:
         self.name = name
         self.design = design
+        self.sources = list(sources or [])
         # How long _program() waits for a build before giving up. None takes
         # _client.DEFAULT_POLL_TIMEOUT, which is sized to outlast the server's
         # own build ceiling. Raise it only if your designs build slower than
@@ -169,6 +171,7 @@ class App:
             top=self.top,
             sys_clk_freq=self.sys_clk_freq,
             timing_target_mhz=self.timing_target_mhz,
+            **({"sources": self.sources} if self.sources else {}),
         )
         bar = _progress.BuildProgress(self.name)
         try:

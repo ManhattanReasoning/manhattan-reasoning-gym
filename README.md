@@ -190,3 +190,29 @@ ruff check . && pytest -q
 ## License
 
 MIT — see [LICENSE](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/LICENSE).
+
+### Multi-file cloud designs
+
+List supporting files relative to the main design's folder:
+
+```python
+app = mrg.App(
+    "my_design",
+    design="project/design.v",
+    sources=["rtl/child.v", "include/constants.vh"],
+)
+```
+
+The same option works for Python helpers, for example
+`design="project/design.py", sources=["helpers.py"]`. Only listed files are
+uploaded; folders and imports are not scanned automatically. Files must stay
+inside the main design folder. Add more files from the CLI with repeatable
+`mrg run client.py --source rtl/child.v` (paths remain relative to the design,
+not the client script). Do not repeat a file already listed in `sources`.
+
+Supported files: `.py`, `.v`, `.vh`, `.mem`, `.hex`. Use simple path names
+(letters, digits, `_`, `-`, `.`, `/`); symlinks and parent-directory paths are
+rejected. Bundles are limited to 128 files, 8 MiB compressed and 16 MiB expanded
+including metadata. Existing single-file designs work unchanged. This requires
+the matching cloud API/build-image update; local `mrg synth`/`mrg pnr` remain
+single-file commands. See [the example](examples/multi_file/README.md).

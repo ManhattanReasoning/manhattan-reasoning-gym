@@ -202,6 +202,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         app.sys_clk_freq = args.sys_clk_freq
     if args.timing_target_mhz is not None:
         app.timing_target_mhz = args.timing_target_mhz
+    if getattr(args, "sources", None):
+        app.sources.extend(args.sources)
     if args.top is not None:
         app.top = args.top
     if args.transport is not None:
@@ -441,6 +443,9 @@ def main() -> None:
     # run
     run_p = sub.add_parser("run", parents=[common, transport_opt],
                            help="program the FPGA and run @app.local_entrypoint()")
+    run_p.add_argument("--source", action="append", dest="sources", default=None,
+                       help="supporting file relative to the design folder "
+                            "(repeatable)")
     run_p.add_argument("file", help="Python file defining an App")
     run_p.add_argument("--fpga-id", type=int, default=None, dest="fpga_id",
                        help="override the fpga_id set in the file")
