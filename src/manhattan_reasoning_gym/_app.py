@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+import signal
+import threading
 from collections.abc import Callable
+
+import requests
 
 from . import _client, _credentials, _progress, _transport
 
@@ -108,10 +112,7 @@ class App:
         # Left empty if none found; the CLI re-checks before running, and
         # programmatic callers can set .api_key later.
         self.api_key = (
-            api_key
-            or os.environ.get("MRG_API_KEY")
-            or _credentials.load(api_url)
-            or ""
+            api_key or os.environ.get("MRG_API_KEY") or _credentials.load(api_url) or ""
         )
         self._entrypoint: Callable | None = None
         self._programmed = False
@@ -125,9 +126,11 @@ class App:
         has been programmed.  It is NOT called automatically when the file is
         imported or run with ``python``.
         """
+
         def decorator(fn: Callable) -> Callable:
             self._entrypoint = fn
             return fn
+
         return decorator
 
     def read(self, addr: int, count: int = 1) -> int | list[int]:
@@ -165,7 +168,9 @@ class App:
         not picked.
         """
         job_id = _client.submit(
-            self.design, self.api_key, self.api_url,
+            self.design,
+            self.api_key,
+            self.api_url,
             top=self.top,
             sys_clk_freq=self.sys_clk_freq,
             timing_target_mhz=self.timing_target_mhz,
@@ -173,12 +178,18 @@ class App:
         bar = _progress.BuildProgress(self.name)
         try:
             job = _client.poll_job(
-                job_id, self.api_key, self.api_url,
+                job_id,
+                self.api_key,
+                self.api_url,
                 timeout=self.poll_timeout,
                 on_poll=bar.update,
             )
         except BaseException:
             bar.abort()
+            try:
+                _client.cancel_job(job_id, self.api_key, self.api_url)
+            except Exception:
+                pass
             raise
         self.fpga_id = job["fpga_id"]
         bar.finish(self.fpga_id)
@@ -190,16 +201,49 @@ class App:
         Closes this App's WebSocket first: an open socket holds the board's
         link lock, which the reset job needs.
         """
+        if self.fpga_id is None:
+            return ""
+
         self._close_connection()
-        job_id = _client.release_session(self.fpga_id, self.api_key, self.api_url)
-        self._programmed = False
-        return job_id
+
+        orig_handler = None
+        try:
+            # Shield the network call from SIGINT so mashing Ctrl-C does not abort
+            # the release request while it's in flight.
+            if threading.current_thread() is threading.main_thread():
+                try:
+                    orig_handler = signal.getsignal(signal.SIGINT)
+                    signal.signal(signal.SIGINT, signal.SIG_IGN)
+                except (ValueError, TypeError):
+                    orig_handler = None
+            try:
+                job_id = _client.release_session(
+                    self.fpga_id, self.api_key, self.api_url
+                )
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    # Session key expired or missing in Redis while the board is still
+                    # reserved; fall back to direct reset to return the FPGA to idle.
+                    res = _client.reset_fpga(self.fpga_id, self.api_key, self.api_url)
+                    job_id = res.get("job_id", "")
+                else:
+                    raise
+            self._programmed = False
+            return job_id
+        finally:
+            if orig_handler is not None:
+                signal.signal(signal.SIGINT, orig_handler)
 
     def __enter__(self) -> App:
         return self
 
-    def __exit__(self, *_) -> None:
-        self.release()
+    def __exit__(self, exc_type, *_) -> None:
+        try:
+            self.release()
+        except Exception:
+            # Do not let release errors mask exceptions raised inside the with-block
+            if exc_type is None:
+                raise
 
     def _ensure_programmed(self) -> None:
         if not self._programmed:
