@@ -225,7 +225,11 @@ def get_job(job_id: str, api_key: str, api_url: str) -> dict:
 
 
 def list_jobs(
-    api_key: str, api_url: str, status: str | None = None, *, timeout: float | None = None
+    api_key: str,
+    api_url: str,
+    status: str | None = None,
+    *,
+    timeout: float | None = None,
 ) -> list[dict]:
     """Return every job the caller (the owner of ``api_key``) has submitted,
     newest first. Pass ``status`` (e.g. ``"running"``) to filter."""
