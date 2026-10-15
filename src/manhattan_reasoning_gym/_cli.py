@@ -203,7 +203,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     if args.timing_target_mhz is not None:
         app.timing_target_mhz = args.timing_target_mhz
     if getattr(args, "sources", None):
-        app.sources.extend(args.sources)
+        app.sources = list(app.sources or []) + args.sources
+    if getattr(args, "include_dir", None) is not None:
+        app.include_dir = args.include_dir
     if args.top is not None:
         app.top = args.top
     if args.transport is not None:
@@ -443,9 +445,12 @@ def main() -> None:
     # run
     run_p = sub.add_parser("run", parents=[common, transport_opt],
                            help="program the FPGA and run @app.local_entrypoint()")
+    run_p.add_argument("--include-dir", default=None,
+                       help="directory of supporting sources, relative to "
+                            "the design folder")
     run_p.add_argument("--source", action="append", dest="sources", default=None,
-                       help="supporting file relative to the design folder "
-                            "(repeatable)")
+                       help="explicit source relative to --include-dir or the design "
+                            "folder; disables discovery (repeatable)")
     run_p.add_argument("file", help="Python file defining an App")
     run_p.add_argument("--fpga-id", type=int, default=None, dest="fpga_id",
                        help="override the fpga_id set in the file")

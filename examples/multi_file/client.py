@@ -7,7 +7,6 @@ import manhattan_reasoning_gym as mrg
 app = mrg.App(
     "multi_file",
     design=str(Path(__file__).with_name("design.v")),
-    sources=["rtl/constant_value.v", "include/values.vh"],
 )
 
 

@@ -109,3 +109,51 @@ def test_cli_appends_repeated_sources(monkeypatch):
     )
     _cli.main()
     assert selected == ["base.v", "child.v", "inc/defs.vh"]
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_submit_discovers_or_collects_directory(tmp_path, monkeypatch, directory):
+    from unittest.mock import Mock
+
+    from manhattan_reasoning_gym import _client
+
+    main = tmp_path / "design.py"
+    main.write_text("import helper")
+    root = tmp_path / "support" if directory else tmp_path
+    root.mkdir(exist_ok=True)
+    (root / "helper.py").write_text("VALUE = 42")
+    response = Mock()
+    response.json.return_value = {"job_id": "job"}
+    post = Mock(return_value=response)
+    monkeypatch.setattr(_client.requests, "post", post)
+    _client.submit(
+        str(main),
+        "key",
+        "https://example.test",
+        include_dir="support" if directory else None,
+    )
+    content = post.call_args.kwargs["files"]["file"][1]
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        assert set(archive.namelist()) == {"mrg-project.json", "design.py", "helper.py"}
+
+
+def test_cli_directory_reaches_submission(monkeypatch):
+    import sys
+    from unittest.mock import Mock
+
+    from manhattan_reasoning_gym import _app, _cli
+
+    def load(_):
+        app = _app.App("test", design="design.v", api_key="key")
+        app._entrypoint = lambda: None
+
+    submit = Mock(return_value="job")
+    monkeypatch.setattr(_cli, "_load_user_module", load)
+    monkeypatch.setattr(_app._client, "submit", submit)
+    monkeypatch.setattr(_app._client, "poll_job", Mock(return_value={"fpga_id": 2}))
+    monkeypatch.setattr(
+        sys, "argv", ["mrg", "run", "client.py", "--include-dir", "support"]
+    )
+    _cli.main()
+    assert submit.call_args.kwargs["include_dir"] == "support"
+    assert "sources" not in submit.call_args.kwargs

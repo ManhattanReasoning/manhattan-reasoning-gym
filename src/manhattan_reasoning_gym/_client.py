@@ -67,6 +67,7 @@ def submit(
     timing_target_mhz: float | None = None,
     *,
     sources: list[str] | None = None,
+    include_dir: str | None = None,
 ) -> str:
     """Submit a design for build_and_program and return its job id.
 
@@ -81,7 +82,7 @@ def submit(
     disambiguator (ignored for Amaranth), only needed when the file has more
     than one module exposing the required Wishbone contract.
     """
-    # Supporting paths are relative to the design folder, never auto-discovered.
+    # Inspect local dependencies without importing or executing the design.
     url = f"{api_url}/submit"
     # Optional multipart form fields; older servers simply ignore extra fields.
     # top disambiguates a Verilog design's top module; sys_clk_freq re-clocks
@@ -95,10 +96,10 @@ def submit(
     if timing_target_mhz:
         data["timing_target_mhz"] = str(timing_target_mhz)
     data = data or None
-    if sources:
-        from ._project import source_bundle
+    from ._project import source_bundle
 
-        bundle = source_bundle(design_path, sources)
+    bundle = source_bundle(design_path, sources, include_dir, single_file_raw=True)
+    if bundle is not None:
         resp = requests.post(
             url, headers={"X-API-Key": api_key},
             files={"file": ("project.zip", bundle, "application/zip")}, data=data,
