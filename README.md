@@ -180,6 +180,12 @@ mrg read  <fpga_id> <addr> [--count N]
 mrg write <fpga_id> <addr> <value>
 ```
 
+Human-readable `mrg status` output includes the server commit from `/health`.
+A package built with local changes is marked `modified source`. Older servers
+or builds without commit metadata show `unknown`; an unavailable health endpoint
+shows `unavailable` without suppressing board status. `mrg status --json` keeps
+its existing board-only output and does not make the extra health request.
+
 ## Development
 
 ```bash
@@ -251,3 +257,20 @@ or an explicit list if necessary. A design without local dependencies keeps
 the single-file upload format. This requires the matching cloud API/build-image
 update; local `mrg synth`/`mrg pnr` remain single-file commands.
 See [the example](examples/multi_file/README.md).
+
+### Status durations
+
+`mrg status` shows `HELD FOR` (time since the current reservation began) and
+`JOB AGE` (time since submission of the job currently assigned to the board).
+When logged in, it also lists your queued/running builds, including those with
+no board yet, with elapsed time and the latest stage when available. That extra
+lookup has a three-second timeout; a failure does not hide the board table.
+Anonymous status requests do not fetch private jobs.
+
+Durations are snapshots in `HH:MM:SS`; run the command again to refresh them.
+Job age includes queueing, building, and flashing—it is not billable build time.
+`mrg jobs` and `mrg job` also show elapsed time; completed, failed, or cancelled
+jobs use their last-update timestamp as the end instead of continuing to tick.
+Older servers/sessions without start timestamps show `-`, as do invalid dates.
+Client clock skew can affect active durations; negative values are clamped to zero.
+JSON output retains the API response shape without adding computed duration fields.

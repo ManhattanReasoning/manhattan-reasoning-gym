@@ -237,12 +237,19 @@ def get_job(job_id: str, api_key: str, api_url: str) -> dict:
     return resp.json()
 
 
-def list_jobs(api_key: str, api_url: str, status: str | None = None) -> list[dict]:
+def list_jobs(
+    api_key: str,
+    api_url: str,
+    status: str | None = None,
+    *,
+    timeout: float | None = None,
+) -> list[dict]:
     """Return every job the caller (the owner of ``api_key``) has submitted,
     newest first. Pass ``status`` (e.g. ``"running"``) to filter."""
     params = {"status": status} if status else None
     resp = requests.get(
-        f"{api_url}/jobs", headers={"X-API-Key": api_key}, params=params
+        f"{api_url}/jobs", headers={"X-API-Key": api_key}, params=params,
+        **({"timeout": timeout} if timeout is not None else {}),
     )
     resp.raise_for_status()
     return resp.json()
@@ -324,3 +331,14 @@ def _ws_url(api_url: str, fpga_id: int) -> str:
     else:
         base = api_url
     return f"{base}/fpga/{fpga_id}/stream"
+
+
+def get_health(api_url: str) -> dict:
+    """Read public server health with a bounded wait for status display."""
+    response = requests.get(f"{api_url.rstrip('/')}/health", timeout=3)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError("Invalid health response")
+    return data
+
