@@ -231,6 +231,19 @@ def cmd_run(args: argparse.Namespace) -> None:
     app._entrypoint()
 
 
+def _print_server_version(api_url: str) -> None:
+    try:
+        health = _client.get_health(api_url)
+        commit = health.get("git_commit")
+        if not isinstance(commit, str) or not commit:
+            commit = "unknown"
+        elif health.get("git_dirty") is True:
+            commit += " (modified source)"
+    except (requests.RequestException, ValueError):
+        commit = "unavailable"
+    print(f"  server commit: {commit}")
+
+
 def _elapsed_since(value, now: datetime, end=None) -> str:
     """Format a timestamp duration; legacy or invalid values stay unknown."""
     try:
@@ -286,6 +299,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         if args.json:
             print(json.dumps(d, indent=2))
             return
+        _print_server_version(api_url)
         sess = d.get("session") or {}
         print(f"\n  FPGA {d['fpga_id']}")
         print(f"  {'state:':<14} {_fmt_state(d['state'])}")
@@ -310,6 +324,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         if args.json:
             print(json.dumps(fpgas, indent=2))
             return
+        _print_server_version(api_url)
         header = (
             f"  {'ID':>2}  {'STATE':<14}  {'OWNER':<12}  "
             f"{'HELD FOR':<12}  {'JOB AGE':<12}  CURRENT JOB"

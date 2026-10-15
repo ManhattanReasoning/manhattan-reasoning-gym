@@ -180,6 +180,12 @@ mrg read  <fpga_id> <addr> [--count N]
 mrg write <fpga_id> <addr> <value>
 ```
 
+Human-readable `mrg status` output includes the server commit from `/health`.
+A package built with local changes is marked `modified source`. Older servers
+or builds without commit metadata show `unknown`; an unavailable health endpoint
+shows `unavailable` without suppressing board status. `mrg status --json` keeps
+its existing board-only output and does not make the extra health request.
+
 ## Development
 
 ```bash
