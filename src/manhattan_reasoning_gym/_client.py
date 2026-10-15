@@ -278,6 +278,7 @@ def release_session(fpga_id: int, api_key: str, api_url: str) -> str:
     resp = requests.post(
         f"{api_url}/fpga/{fpga_id}/session/release",
         headers={"X-API-Key": api_key},
+        timeout=10.0,
     )
     resp.raise_for_status()
     return resp.json()["job_id"]
@@ -287,6 +288,7 @@ def reset_fpga(fpga_id: int, api_key: str, api_url: str) -> dict:
     resp = requests.post(
         f"{api_url}/fpga/{fpga_id}/reset",
         headers={"X-API-Key": api_key},
+        timeout=10.0,
     )
     resp.raise_for_status()
     return resp.json()
