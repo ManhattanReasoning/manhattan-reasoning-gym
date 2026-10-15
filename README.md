@@ -190,3 +190,20 @@ ruff check . && pytest -q
 ## License
 
 MIT — see [LICENSE](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/LICENSE).
+
+### Status durations
+
+`mrg status` shows `HELD FOR` (time since the current reservation began) and
+`JOB AGE` (time since submission of the job currently assigned to the board).
+When logged in, it also lists your queued/running builds, including those with
+no board yet, with elapsed time and the latest stage when available. That extra
+lookup has a three-second timeout; a failure does not hide the board table.
+Anonymous status requests do not fetch private jobs.
+
+Durations are snapshots in `HH:MM:SS`; run the command again to refresh them.
+Job age includes queueing, building, and flashing—it is not billable build time.
+`mrg jobs` and `mrg job` also show elapsed time; completed, failed, or cancelled
+jobs use their last-update timestamp as the end instead of continuing to tick.
+Older servers/sessions without start timestamps show `-`, as do invalid dates.
+Client clock skew can affect active durations; negative values are clamped to zero.
+JSON output retains the API response shape without adding computed duration fields.
