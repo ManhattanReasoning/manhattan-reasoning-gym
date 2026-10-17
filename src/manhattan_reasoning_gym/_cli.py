@@ -354,14 +354,39 @@ def cmd_status(args: argparse.Namespace) -> None:
             _print_active_builds(api_key, api_url, now)
 
 
+# ``mrg jobs --type`` values -> the job types they show.
+_JOB_TYPES = {
+    "build": {"build_and_program"},
+    "run": {"run"},
+    "reset": {"reset"},
+    "all": None,  # no filter
+}
+_DEFAULT_JOBS_LIMIT = 10
+
+
 def cmd_jobs(args: argparse.Namespace) -> None:
     api_key, api_url = _creds(args)
     jobs = _client.list_jobs(api_key, api_url, status=args.status)
     if args.json:
+        # Raw server response, unfiltered: scripts depend on its shape.
         print(json.dumps(jobs, indent=2))
         return
-    if not jobs:
-        print("\n  no jobs\n")
+
+    # The table shows your most recent builds by default. Every app.read()/
+    # app.write() over HTTP is its own `run` job, so an unfiltered history is
+    # mostly those, with the builds you're looking for buried among them.
+    job_type = getattr(args, "type", "build") or "build"
+    wanted = _JOB_TYPES[job_type]
+    matching = [d for d in jobs if wanted is None or d.get("type") in wanted]
+    limit = None if getattr(args, "all", False) else getattr(
+        args, "limit", _DEFAULT_JOBS_LIMIT
+    )
+    shown = matching if limit is None else matching[:limit]
+
+    if not shown:
+        what = "jobs" if wanted is None else f"{job_type} jobs"
+        hint = "" if wanted is None else " (try --type all)"
+        print(f"\n  no {what}{hint}\n")
         return
     now = datetime.now(UTC)
     header = (
@@ -372,7 +397,7 @@ def cmd_jobs(args: argparse.Namespace) -> None:
     print()
     print(_c(header, _BOLD))
     print(_c(sep, _DIM))
-    for d in jobs:
+    for d in shown:
         print(
             f"  {_fmt_id(d['job_id']):<10}  "
             f"{d['type']:<18}  "
@@ -381,6 +406,14 @@ def cmd_jobs(args: argparse.Namespace) -> None:
             f"{_job_elapsed(d, now):<12}  "
             f"{d['created_at']}"
         )
+    hidden = []
+    if len(matching) > len(shown):
+        hidden.append(f"{len(matching) - len(shown)} older (-n N or --all)")
+    if len(jobs) > len(matching):
+        hidden.append(f"{len(jobs) - len(matching)} of other types (--type all)")
+    if hidden:
+        print(_c(f"\n  showing the {len(shown)} most recent; hidden: "
+                 + ", ".join(hidden), _DIM))
     print()
 
 
@@ -595,11 +628,12 @@ def main() -> None:
     st_p.add_argument("--json", action="store_true",
                       help="print the raw orchestrator response as JSON")
 
-    # jobs [--status] [--json]
+    # jobs [--status] [--type] [-n N | --all] [--json]
     jobs_p = sub.add_parser(
         "jobs", parents=[common],
-        help="list your jobs (newest first) -- a build in flight has no "
-             "board yet, so this is the only way to find its job_id",
+        help="list your most recent builds (newest first) -- a build in "
+             "flight has no board yet, so this is the only way to find its "
+             "job_id",
     )
     jobs_p.add_argument(
         "--status", default=None,
@@ -607,8 +641,21 @@ def main() -> None:
         help="only show jobs in this status (e.g. running = currently in "
              "flight, building or flashing)",
     )
+    jobs_p.add_argument(
+        "--type", default="build", choices=sorted(_JOB_TYPES),
+        help="which jobs to list (default: build). Every HTTP app.read()/"
+             "write() is a 'run' job, so 'all' is mostly those",
+    )
+    count = jobs_p.add_mutually_exclusive_group()
+    count.add_argument(
+        "-n", "--limit", type=int, default=_DEFAULT_JOBS_LIMIT, metavar="N",
+        help=f"show the N most recent (default: {_DEFAULT_JOBS_LIMIT})",
+    )
+    count.add_argument("--all", action="store_true",
+                       help="show every matching job, not just the most recent")
     jobs_p.add_argument("--json", action="store_true",
-                        help="print the raw orchestrator response as JSON")
+                        help="print the raw orchestrator response as JSON "
+                             "(unfiltered: ignores --type/-n/--all)")
 
     # job <job_id>
     job_p = sub.add_parser("job", parents=[common], help="show job status and metadata")
