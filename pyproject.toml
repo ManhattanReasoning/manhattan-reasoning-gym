@@ -30,8 +30,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://manhattanreasoning.com"
-Repository = "https://github.com/ManhattanReasoning/manhattan-reasoning-gym"
-Issues = "https://github.com/ManhattanReasoning/manhattan-reasoning-gym/issues"
+Repository = "https://github.com/ManhattanReasoning/manhattan-reasoning-sdk"
+Issues = "https://github.com/ManhattanReasoning/manhattan-reasoning-sdk/issues"
 
 [project.scripts]
 mrg = "manhattan_reasoning_gym._cli:main"

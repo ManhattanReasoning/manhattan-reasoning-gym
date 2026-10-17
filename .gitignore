@@ -9,3 +9,6 @@ venv/
 .ruff_cache/
 .pytest_cache/
 .ipynb_checkpoints/
+
+# macOS Finder metadata
+.DS_Store
