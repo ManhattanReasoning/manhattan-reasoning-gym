@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ManhattanReasoning/manhattan-reasoning-sdk/main/assets/repo_logo.png" alt="Manhattan Reasoning Developer Kit" width="600">
+</p>
+
 # Manhattan Reasoning Gym
 
 Python SDK and CLI (`mrg`) for hardware design: iterate **locally** with fast
@@ -117,7 +121,7 @@ instead: `App(..., transport="http")`, `MRG_TRANSPORT=http`, or
 anywhere but is much slower: each call is a queued job (about 0.5 s or more).
 
 Or drive it from the CLI with a file that defines an `App` and an
-`@app.local_entrypoint()` — see [`examples/app.py`](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/examples/app.py), which
+`@app.local_entrypoint()` — see [`examples/app.py`](https://github.com/ManhattanReasoning/manhattan-reasoning-sdk/blob/main/examples/app.py), which
 exercises the example MAC design end-to-end:
 
 ```bash
@@ -153,7 +157,7 @@ orchestrator URL). Every command resolves the key in this order:
 
 ## Tutorials
 
-Two runnable notebooks in [`examples/notebooks/`](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/tree/main/examples/notebooks):
+Two runnable notebooks in [`examples/notebooks/`](https://github.com/ManhattanReasoning/manhattan-reasoning-sdk/tree/main/examples/notebooks):
 
 - **`01_build_and_run`** — local synth/pnr feedback → program a real FPGA.
 - **`02_sandboxing`** — run an agent in a locked sandbox that promotes to silicon.
@@ -197,7 +201,7 @@ ruff check . && pytest -q
 
 ## License
 
-MIT — see [LICENSE](https://github.com/ManhattanReasoning/manhattan-reasoning-gym/blob/main/LICENSE).
+MIT — see [LICENSE](https://github.com/ManhattanReasoning/manhattan-reasoning-sdk/blob/main/LICENSE).
 
 ### Multi-file cloud designs
 
