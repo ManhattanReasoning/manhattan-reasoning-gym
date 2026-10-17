@@ -19,3 +19,24 @@ jobs:
         run: ruff check .
       - name: Tests
         run: pytest -q
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        # The SDK from this checkout (example client_sdk.py modules import it),
+        # numpy for the bert_ffn tiling/quantization tests, amaranth for the
+        # sim tests.
+        run: pip install -e ".[dev]" numpy amaranth
+      - name: Tests
+        run: pytest examples
+      - name: Firmware framing tests (C)
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -g \
+              examples/sat_solver/tests/unit/test_network_stack.c \
+              -o /tmp/test_network_stack
+          /tmp/test_network_stack
