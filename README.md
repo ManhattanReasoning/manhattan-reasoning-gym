@@ -172,7 +172,9 @@ mrg pnr   <design.py> [--sys-clk-mhz N] [--timing-target-mhz N] [--target-mhz N]
 mrg run   <file.py> [--no-program [--fpga-id N]]   # --fpga-id only meaningful with --no-program:
                                                      # a fresh build is never pinned to a board
 mrg status [fpga_id] [--json]
-mrg jobs [--status queued|running|complete|failed|cancelled] [--json]
+mrg jobs [--status queued|running|complete|failed|cancelled]
+         [--type build|run|reset|all] [-n N | --all] [--json]
+                                            # default: your 10 most recent builds
 mrg job <job_id> [--json]
 mrg logs | cancel <job_id>
 mrg reset <fpga_id>
@@ -273,4 +275,9 @@ Job age includes queueing, building, and flashing—it is not billable build tim
 jobs use their last-update timestamp as the end instead of continuing to tick.
 Older servers/sessions without start timestamps show `-`, as do invalid dates.
 Client clock skew can affect active durations; negative values are clamped to zero.
+
+`mrg jobs` lists your 10 most recent builds by default, with a footer counting
+what's hidden. Every HTTP `app.read()`/`app.write()` is its own `run` job, so
+`--type all` is mostly those. `-n N` shows more and `--all` shows everything.
+`--json` is always the raw, unfiltered server response.
 JSON output retains the API response shape without adding computed duration fields.
